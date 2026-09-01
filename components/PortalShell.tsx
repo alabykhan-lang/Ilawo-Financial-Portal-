@@ -335,7 +335,7 @@ function OverviewView({
   const visibleTerms = data.terms.filter((term) => term.session_id === selectedSession);
   const paymentsForFilters = useMemo(() => data.payments.filter((payment) => {
     if (range === "today" && payment.payment_date !== todayISO()) return false;
-    if (range === "term" && selectedTerm && payment.term_id !== selectedTerm) return false;
+    if (range === "term" && selectedTerm && payment.term_id && payment.term_id !== selectedTerm) return false;
     if (selectedSession && payment.session_id !== selectedSession) return false;
     if (selectedClass && payment.class_id !== selectedClass) return false;
     if (selectedCategory && payment.category_id !== selectedCategory) return false;
@@ -343,15 +343,23 @@ function OverviewView({
   }), [data.payments, range, selectedTerm, selectedSession, selectedClass, selectedCategory]);
   const confirmedPaymentIds = useMemo(() => new Set(data.handoverItems.filter((item) => data.handovers.find((handover) => handover.id === item.handover_id)?.status === "confirmed").map((item) => item.payment_id)), [data.handoverItems, data.handovers]);
   const collectedToday = data.payments.filter((payment) => payment.payment_date === todayISO()).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
-  const collectedTerm = data.payments.filter((payment) => selectedTerm ? payment.term_id === selectedTerm : payment.session_id === selectedSession).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
+  const collectedTerm = data.payments.filter((payment) => payment.session_id === selectedSession && (!selectedTerm || !payment.term_id || payment.term_id === selectedTerm)).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
   const moneyWithPrincipal = data.payments.filter((payment) => confirmedPaymentIds.has(payment.id)).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
   const moneyWithStaff = data.payments.filter((payment) => !confirmedPaymentIds.has(payment.id)).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
   const pendingHandovers = data.handovers.filter((handover) => handover.status === "pending");
-  const studentBalances = useMemo(() => {
-    const result = new Map<string, number>();
-    for (const payment of data.payments) result.set(payment.student_id, (result.get(payment.student_id) || 0) + numberValue(payment.amount_paid));
-    return result;
-  }, [data.payments]);
+  const studentsOwing = useMemo(() => {
+    const expectedByStudent = new Map<string, number>();
+    const paidByStudent = new Map<string, number>();
+    for (const student of data.students.filter((item) => item.status === "active")) {
+      const expected = data.charges.filter((charge) => charge.active && charge.session_id === selectedSession && charge.class_id === student.class_id && (!selectedTerm || !charge.term_id || charge.term_id === selectedTerm) && data.categoryClasses.some((item) => item.category_id === charge.category_id && item.class_id === student.class_id)).reduce((sum, charge) => sum + numberValue(charge.expected_amount), 0);
+      if (expected > 0) expectedByStudent.set(student.id, expected);
+    }
+    for (const payment of data.payments) {
+      if (payment.session_id !== selectedSession || (selectedTerm && payment.term_id && payment.term_id !== selectedTerm)) continue;
+      paidByStudent.set(payment.student_id, (paidByStudent.get(payment.student_id) || 0) + numberValue(payment.amount_paid));
+    }
+    return data.students.filter((student) => (expectedByStudent.get(student.id) || 0) > (paidByStudent.get(student.id) || 0)).length;
+  }, [data.students, data.charges, data.categoryClasses, data.payments, selectedSession, selectedTerm]);
 
   function categorySummary(category: FinancialCategory) {
     const students = data.students.filter((student) => (!selectedClass || student.class_id === selectedClass) && student.status === "active" && data.categoryClasses.some((item) => item.category_id === category.id && item.class_id === student.class_id));
@@ -379,8 +387,9 @@ function OverviewView({
   const selectedClassObject = selectedClass ? data.classes.find((item) => item.id === selectedClass) : undefined;
   const statusStudents = classSummary ? data.students.filter((student) => {
     if (student.class_id !== classSummary.classId || student.status !== "active") return false;
-    const paid = data.payments.filter((payment) => payment.student_id === student.id && payment.category_id === classSummary.categoryId && payment.session_id === selectedSession && (!selectedTerm || payment.term_id === selectedTerm)).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
-    const charge = data.charges.find((item) => item.category_id === classSummary.categoryId && item.class_id === student.class_id && item.session_id === selectedSession && (item.term_id === selectedTerm || !item.term_id) && item.active);
+    const paid = data.payments.filter((payment) => payment.student_id === student.id && payment.category_id === classSummary.categoryId && payment.session_id === selectedSession && (!selectedTerm || !payment.term_id || payment.term_id === selectedTerm)).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
+    const category = data.categories.find((item) => item.id === classSummary.categoryId);
+    const charge = data.charges.find((item) => item.category_id === classSummary.categoryId && item.class_id === student.class_id && item.session_id === selectedSession && (item.term_id === selectedTerm || (!item.term_id && !category?.applicable_to_term)) && item.active);
     const expected = numberValue(charge?.expected_amount);
     const status = expected > 0 && paid >= expected ? "fully" : paid > 0 ? "part" : "unpaid";
     return status === classSummary.status;
@@ -400,7 +409,7 @@ function OverviewView({
         <MetricCard label="Money with Principal" value={naira(moneyWithPrincipal)} helper="Confirmed handovers" tone="ink" />
         <MetricCard label="Money still with staff" value={naira(moneyWithStaff)} helper="Until Principal confirms" tone="rose" />
         <MetricCard label="Pending handovers" value={String(pendingHandovers.length)} helper="Need Principal action" tone="gold" />
-        <MetricCard label="Students owing" value={String(data.students.filter((student) => student.status === "active" && (studentBalances.get(student.id) || 0) === 0).length)} helper="Set expected charges for exact balances" tone="teal" />
+        <MetricCard label="Students owing" value={String(studentsOwing)} helper="Based on configured expected charges" tone="teal" />
       </div>
 
       <section className="panel filters-panel">
