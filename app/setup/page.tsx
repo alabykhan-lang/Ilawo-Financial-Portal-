@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -31,7 +32,7 @@ export default function SetupPage() {
     <main className="setup-page">
       <section className="setup-card">
         <div className="brand-lockup compact">
-          <div className="mark-fallback">ICG</div>
+          <Image src="/ilawo-mark.svg" alt="Ilawo Community Grammar School mark" width={48} height={48} priority />
           <div>
             <p className="eyebrow">Office of the Principal</p>
             <h1>Ilawo Financial Portal</h1>
@@ -41,7 +42,7 @@ export default function SetupPage() {
         <div className="section-heading">
           <span className="section-kicker">ONE-TIME SETUP</span>
           <h2>Create the first Principal account</h2>
-          <p>This form works only while no active Principal exists and requires the server-only bootstrap secret.</p>
+          <p>This form works only while no Principal exists and requires the server-only bootstrap secret.</p>
         </div>
         <form className="stack-form" onSubmit={submit}>
           <label>Principal name<input required value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} placeholder="e.g. A. O. Principal" /></label>

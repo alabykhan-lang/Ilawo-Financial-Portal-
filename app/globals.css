@@ -32,6 +32,8 @@ h1, h2, h3, strong, b { letter-spacing: -.02em; }
 .school-brand { display: flex; align-items: center; gap: 13px; min-width: 0; }
 .school-brand img { flex: 0 0 auto; border-radius: 14px; }
 .school-brand.compact img { border-radius: 12px; }
+.brand-lockup { display: flex; align-items: center; gap: 13px; }
+.brand-lockup > img { flex: 0 0 auto; border-radius: 14px; }
 .brand-name { margin: 0; font-size: 11px; font-weight: 800; letter-spacing: .07em; line-height: 1.35; color: var(--teal-dark); }
 .brand-location { margin: 3px 0 0; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
 .auth-heading { margin: 42px 0 25px; }
