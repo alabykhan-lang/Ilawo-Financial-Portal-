@@ -51,21 +51,33 @@ export async function POST(request: Request) {
       throw profileError;
     }
 
-    const { data: permissionRows } = await admin.from("permissions").select("key");
+    const { data: permissionRows, error: permissionError } = await admin.from("permissions").select("key");
+    if (permissionError) {
+      await admin.auth.admin.deleteUser(created.user.id);
+      throw permissionError;
+    }
     if (permissionRows?.length) {
-      await admin.from("profile_permissions").upsert(
+      const { error: assignmentError } = await admin.from("profile_permissions").upsert(
         permissionRows.map((permission) => ({ profile_id: created.user!.id, permission_key: permission.key })),
         { onConflict: "profile_id,permission_key" },
       );
+      if (assignmentError) {
+        await admin.auth.admin.deleteUser(created.user.id);
+        throw assignmentError;
+      }
     }
 
-    await admin.from("audit_logs").insert({
+    const { error: auditError } = await admin.from("audit_logs").insert({
       actor_id: created.user.id,
       action: "principal.bootstrap",
       record_type: "profiles",
       record_id: created.user.id,
       metadata: { email, method: "one-time-bootstrap" },
     });
+    if (auditError) {
+      await admin.auth.admin.deleteUser(created.user.id);
+      throw auditError;
+    }
 
     return NextResponse.json({ ok: true, message: "Principal account created. You can now sign in." }, { status: 201 });
   } catch (error) {

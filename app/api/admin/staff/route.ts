@@ -35,45 +35,54 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Enter a valid name, email and temporary password of at least 8 characters." }, { status: 400 });
       }
 
-      const { data: created, error: userError } = await admin.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: { full_name: fullName },
-      });
-      if (userError || !created.user) throw userError || new Error("Staff account could not be created.");
+      let createdUserId: string | null = null;
+      try {
+        const { data: created, error: userError } = await admin.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: true,
+          user_metadata: { full_name: fullName },
+        });
+        if (userError || !created.user) throw userError || new Error("Staff account could not be created.");
+        createdUserId = created.user.id;
 
-      const staffCode = `ILW-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
-      const { error: profileError } = await admin.from("profiles").upsert({
-        id: created.user.id,
-        full_name: fullName,
-        email,
-        role: "staff",
-        active: true,
-        staff_code: staffCode,
-      });
-      if (profileError) {
-        await admin.auth.admin.deleteUser(created.user.id);
-        throw profileError;
+        const staffCode = `ILW-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+        const { error: profileError } = await admin.from("profiles").upsert({
+          id: created.user.id,
+          full_name: fullName,
+          email,
+          role: "staff",
+          active: true,
+          staff_code: staffCode,
+        });
+        if (profileError) throw profileError;
+
+        const { data: validPermissions, error: permissionLookupError } = await admin.from("permissions").select("key").in("key", permissions);
+        if (permissionLookupError) throw permissionLookupError;
+        if (validPermissions?.length) {
+          const { error: permissionError } = await admin.from("profile_permissions").insert(
+            validPermissions.map((permission) => ({ profile_id: created.user!.id, permission_key: permission.key })),
+          );
+          if (permissionError) throw permissionError;
+        }
+
+        const { error: auditError } = await admin.from("audit_logs").insert({
+          actor_id: user.id,
+          action: "staff.created",
+          record_type: "profiles",
+          record_id: created.user.id,
+          metadata: { email, permissions: validPermissions?.map((permission) => permission.key) || [] },
+        });
+        if (auditError) throw auditError;
+
+        return NextResponse.json({ ok: true, staffCode, userId: created.user.id }, { status: 201 });
+      } catch (error) {
+        if (createdUserId) {
+          const { error: cleanupError } = await admin.auth.admin.deleteUser(createdUserId);
+          if (cleanupError) console.error("Staff cleanup error", cleanupError);
+        }
+        throw error;
       }
-
-      const { data: validPermissions } = await admin.from("permissions").select("key").in("key", permissions);
-      if (validPermissions?.length) {
-        const { error: permissionError } = await admin.from("profile_permissions").insert(
-          validPermissions.map((permission) => ({ profile_id: created.user!.id, permission_key: permission.key })),
-        );
-        if (permissionError) throw permissionError;
-      }
-
-      await admin.from("audit_logs").insert({
-        actor_id: user.id,
-        action: "staff.created",
-        record_type: "profiles",
-        record_id: created.user.id,
-        metadata: { email, permissions: validPermissions?.map((permission) => permission.key) || [] },
-      });
-
-      return NextResponse.json({ ok: true, staffCode, userId: created.user.id }, { status: 201 });
     }
 
     const targetId = String(body.userId || "");

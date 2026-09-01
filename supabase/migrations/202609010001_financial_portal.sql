@@ -441,6 +441,49 @@ begin
 end;
 $$;
 
+create or replace function private.validate_expected_charge()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_category_term boolean;
+  v_category_active boolean;
+  v_term_session uuid;
+begin
+  select applicable_to_term, active
+    into v_category_term, v_category_active
+  from public.financial_categories
+  where id = new.category_id;
+  if v_category_term is null then
+    raise exception 'Financial category is not available';
+  end if;
+  if new.active and not v_category_active then
+    raise exception 'An active charge must use an active financial category';
+  end if;
+  if not exists (
+    select 1
+    from public.financial_category_classes
+    where category_id = new.category_id and class_id = new.class_id
+  ) then
+    raise exception 'This financial category does not apply to the selected class';
+  end if;
+  if new.term_id is not null then
+    select session_id into v_term_session from public.terms where id = new.term_id;
+    if v_term_session is null or v_term_session <> new.session_id then
+      raise exception 'Term and academic session do not match';
+    end if;
+  elsif v_category_term then
+    raise exception 'A term is required for this financial category';
+  end if;
+  if not v_category_term and new.term_id is not null then
+    raise exception 'This financial category is not term-specific';
+  end if;
+  return new;
+end;
+$$;
+
 create or replace function private.prevent_payment_mutation()
 returns trigger
 language plpgsql
@@ -579,6 +622,9 @@ begin
   select * into v_handover from public.handovers where id = p_handover_id for update;
   if v_handover.id is null or v_handover.status <> 'pending' then
     raise exception 'This handover is no longer pending';
+  end if;
+  if v_handover.staff_id = v_user then
+    raise exception 'You cannot review your own handover';
   end if;
 
   if lower(p_decision) = 'confirm' then
@@ -769,6 +815,8 @@ drop trigger if exists payments_validate on public.student_payments;
 create trigger payments_validate before insert on public.student_payments for each row execute function private.validate_payment();
 drop trigger if exists payments_immutable on public.student_payments;
 create trigger payments_immutable before update or delete on public.student_payments for each row execute function private.prevent_payment_mutation();
+drop trigger if exists expected_charges_validate on public.expected_charges;
+create trigger expected_charges_validate before insert or update on public.expected_charges for each row execute function private.validate_expected_charge();
 
 drop trigger if exists payments_audit_insert on public.student_payments;
 create trigger payments_audit_insert after insert on public.student_payments for each row execute function private.audit_insert();
@@ -793,6 +841,7 @@ revoke all on all tables in schema private from public, anon, authenticated;
 revoke all on function private.handle_new_user() from public, anon, authenticated;
 revoke all on function private.set_updated_at() from public, anon, authenticated;
 revoke all on function private.validate_payment() from public, anon, authenticated;
+revoke all on function private.validate_expected_charge() from public, anon, authenticated;
 revoke all on function private.prevent_payment_mutation() from public, anon, authenticated;
 revoke all on function private.audit_insert() from public, anon, authenticated;
 revoke all on function private.audit_change() from public, anon, authenticated;
@@ -881,7 +930,7 @@ create policy students_update on public.students for update to authenticated
   with check (private.has_permission('manage_students'));
 
 create policy expected_charges_select on public.expected_charges for select to authenticated
-  using (private.has_permission('view_school_reports') or private.has_permission('view_students'));
+  using (private.has_permission('view_school_reports') or private.has_permission('view_students') or private.has_permission('manage_financial_categories'));
 create policy expected_charges_insert on public.expected_charges for insert to authenticated
   with check (private.has_permission('manage_financial_categories'));
 create policy expected_charges_update on public.expected_charges for update to authenticated
