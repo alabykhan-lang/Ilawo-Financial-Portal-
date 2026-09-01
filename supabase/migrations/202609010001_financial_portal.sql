@@ -388,22 +388,67 @@ set search_path = public, pg_temp
 as $$
 declare
   v_student_class uuid;
+  v_student_session uuid;
   v_term_session uuid;
+  v_category_term boolean;
 begin
-  select class_id into v_student_class from public.students where id = new.student_id;
+  select class_id, academic_session_id into v_student_class, v_student_session
+  from public.students
+  where id = new.student_id;
   if v_student_class is null or v_student_class <> new.class_id then
     raise exception 'Student and class do not match';
+  end if;
+  if v_student_session is null or v_student_session <> new.session_id then
+    raise exception 'Student and academic session do not match';
+  end if;
+  select applicable_to_term into v_category_term
+  from public.financial_categories
+  where id = new.category_id and (active or new.is_correction);
+  if v_category_term is null then
+    raise exception 'Financial category is not active';
+  end if;
+  if not exists (
+    select 1 from public.financial_category_classes
+    where category_id = new.category_id and class_id = new.class_id
+  ) then
+    raise exception 'This financial category does not apply to the selected class';
   end if;
   if new.term_id is not null then
     select session_id into v_term_session from public.terms where id = new.term_id;
     if v_term_session is null or v_term_session <> new.session_id then
       raise exception 'Term and academic session do not match';
     end if;
+  elsif v_category_term then
+    raise exception 'A term is required for this financial category';
   end if;
+  if not v_category_term and new.term_id is not null then
+    raise exception 'This financial category is not term-specific';
+  end if;
+  if not new.is_correction then
+    if new.correction_request_id is not null or new.origin_payment_id is not null then
+      raise exception 'A normal payment cannot carry correction links';
+    end if;
+    new.reference_no := 'ILW-' || to_char(now(), 'YYYYMMDD') || '-' || lpad(nextval('public.payment_reference_seq')::text, 6, '0');
+    new.collected_at = now();
+  elsif new.correction_request_id is null or new.origin_payment_id is null then
+    raise exception 'A correction payment must carry correction links';
+  end if;
+  new.created_at = now();
   if new.collector_id is null then
     raise exception 'Collector is required';
   end if;
   return new;
+end;
+$$;
+
+create or replace function private.prevent_payment_mutation()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  raise exception 'Payment records are immutable. Use the correction workflow.';
 end;
 $$;
 
@@ -564,6 +609,7 @@ declare
   v_request public.payment_correction_requests;
   v_original public.student_payments;
   v_replacement public.student_payments;
+  v_replacement_class uuid;
   v_user uuid := auth.uid();
 begin
   if v_user is null or not private.has_permission('view_school_reports', v_user) then
@@ -577,6 +623,7 @@ begin
   if v_original.id is null then
     raise exception 'Original payment not found';
   end if;
+  v_replacement_class := v_original.class_id;
   if p_approve and exists (
     select 1 from public.handover_items hi
     join public.handovers h on h.id = hi.handover_id
@@ -600,6 +647,14 @@ begin
   end if;
 
   if v_request.action = 'correct' then
+    if v_request.requested_student_id is not null then
+      select class_id into v_replacement_class
+      from public.students
+      where id = v_request.requested_student_id;
+      if v_replacement_class is null then
+        raise exception 'Requested student not found';
+      end if;
+    end if;
     insert into public.student_payments (
       student_id, class_id, category_id, amount_paid, payment_date, collected_at,
       collector_id, session_id, term_id, note, status, is_correction,
@@ -607,7 +662,7 @@ begin
     )
     values (
       coalesce(v_request.requested_student_id, v_original.student_id),
-      v_original.class_id,
+      v_replacement_class,
       coalesce(v_request.requested_category_id, v_original.category_id),
       v_request.requested_amount,
       coalesce(v_original.payment_date, current_date),
@@ -712,6 +767,8 @@ drop trigger if exists personal_products_set_updated_at on public.personal_produ
 create trigger personal_products_set_updated_at before update on public.personal_products for each row execute function private.set_updated_at();
 drop trigger if exists payments_validate on public.student_payments;
 create trigger payments_validate before insert on public.student_payments for each row execute function private.validate_payment();
+drop trigger if exists payments_immutable on public.student_payments;
+create trigger payments_immutable before update or delete on public.student_payments for each row execute function private.prevent_payment_mutation();
 
 drop trigger if exists payments_audit_insert on public.student_payments;
 create trigger payments_audit_insert after insert on public.student_payments for each row execute function private.audit_insert();
@@ -723,6 +780,8 @@ drop trigger if exists handovers_audit_insert on public.handovers;
 create trigger handovers_audit_insert after insert on public.handovers for each row execute function private.audit_insert();
 drop trigger if exists personal_sales_audit_insert on public.personal_sales;
 create trigger personal_sales_audit_insert after insert on public.personal_sales for each row execute function private.audit_insert();
+drop trigger if exists personal_expenses_audit_insert on public.personal_expenses;
+create trigger personal_expenses_audit_insert after insert on public.personal_expenses for each row execute function private.audit_insert();
 drop trigger if exists categories_audit_change on public.financial_categories;
 create trigger categories_audit_change after insert or update on public.financial_categories for each row execute function private.audit_change();
 drop trigger if exists charges_audit_change on public.expected_charges;
@@ -734,6 +793,7 @@ revoke all on all tables in schema private from public, anon, authenticated;
 revoke all on function private.handle_new_user() from public, anon, authenticated;
 revoke all on function private.set_updated_at() from public, anon, authenticated;
 revoke all on function private.validate_payment() from public, anon, authenticated;
+revoke all on function private.prevent_payment_mutation() from public, anon, authenticated;
 revoke all on function private.audit_insert() from public, anon, authenticated;
 revoke all on function private.audit_change() from public, anon, authenticated;
 grant execute on function private.has_permission(text, uuid) to authenticated;
@@ -853,6 +913,10 @@ create policy correction_requests_insert on public.payment_correction_requests f
     requested_by = (select auth.uid())
     and private.has_permission('record_student_payments')
     and status = 'pending'
+    and exists (
+      select 1 from public.student_payments p
+      where p.id = original_payment_id and p.collector_id = (select auth.uid())
+    )
   );
 
 create policy payment_corrections_select on public.payment_corrections for select to authenticated

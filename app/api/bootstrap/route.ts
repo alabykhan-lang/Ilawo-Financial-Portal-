@@ -23,7 +23,6 @@ export async function POST(request: Request) {
       .from("profiles")
       .select("id")
       .eq("role", "principal")
-      .eq("active", true)
       .limit(1);
 
     if (lookupError) throw lookupError;
