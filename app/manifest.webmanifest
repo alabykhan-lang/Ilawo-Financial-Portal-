@@ -1,0 +1,10 @@
+{
+  "name": "Ilawo Financial Portal",
+  "short_name": "Ilawo Finance",
+  "description": "School finance and money custody portal for Ilawo Community Grammar School.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f7f6",
+  "theme_color": "#0d5c63",
+  "icons": [{ "src": "/ilawo-mark.svg", "sizes": "96x96", "type": "image/svg+xml" }]
+}
