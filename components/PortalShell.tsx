@@ -60,6 +60,7 @@ const navItems: Array<{ id: Tab; label: string; icon: string; permission?: Permi
 
 const moneyFilters = [
   { value: "today", label: "Today" },
+  { value: "date", label: "Date" },
   { value: "term", label: "This term" },
   { value: "all", label: "All dates" },
 ] as const;
@@ -325,6 +326,7 @@ function OverviewView({
   const currentSession = data.sessions.find((session) => session.active) || data.sessions[0];
   const currentTerm = data.terms.find((term) => term.session_id === currentSession?.id && term.active) || data.terms.find((term) => term.session_id === currentSession?.id);
   const [range, setRange] = useState<(typeof moneyFilters)[number]["value"]>("today");
+  const [selectedDate, setSelectedDate] = useState(todayISO());
   const [selectedSession, setSelectedSession] = useState(currentSession?.id || "");
   const [selectedTerm, setSelectedTerm] = useState(currentTerm?.id || "");
   const [selectedClass, setSelectedClass] = useState("");
@@ -335,18 +337,21 @@ function OverviewView({
   const visibleTerms = data.terms.filter((term) => term.session_id === selectedSession);
   const paymentsForFilters = useMemo(() => data.payments.filter((payment) => {
     if (range === "today" && payment.payment_date !== todayISO()) return false;
+    if (range === "date" && payment.payment_date !== selectedDate) return false;
     if (range === "term" && selectedTerm && payment.term_id && payment.term_id !== selectedTerm) return false;
     if (selectedSession && payment.session_id !== selectedSession) return false;
     if (selectedClass && payment.class_id !== selectedClass) return false;
     if (selectedCategory && payment.category_id !== selectedCategory) return false;
     return true;
-  }), [data.payments, range, selectedTerm, selectedSession, selectedClass, selectedCategory]);
+  }), [data.payments, range, selectedDate, selectedTerm, selectedSession, selectedClass, selectedCategory]);
+  const isReportViewer = data.profile.role === "principal" || can("view_school_reports");
+  const dashboardPayments = isReportViewer ? data.payments : data.payments.filter((payment) => payment.collector_id === data.profile.id);
   const confirmedPaymentIds = useMemo(() => new Set(data.handoverItems.filter((item) => data.handovers.find((handover) => handover.id === item.handover_id)?.status === "confirmed").map((item) => item.payment_id)), [data.handoverItems, data.handovers]);
-  const collectedToday = data.payments.filter((payment) => payment.payment_date === todayISO()).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
-  const collectedTerm = data.payments.filter((payment) => payment.session_id === selectedSession && (!selectedTerm || !payment.term_id || payment.term_id === selectedTerm)).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
-  const moneyWithPrincipal = data.payments.filter((payment) => confirmedPaymentIds.has(payment.id)).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
-  const moneyWithStaff = data.payments.filter((payment) => !confirmedPaymentIds.has(payment.id)).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
-  const pendingHandovers = data.handovers.filter((handover) => handover.status === "pending");
+  const collectedToday = dashboardPayments.filter((payment) => payment.payment_date === todayISO()).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
+  const collectedTerm = dashboardPayments.filter((payment) => payment.session_id === selectedSession && (!selectedTerm || !payment.term_id || payment.term_id === selectedTerm)).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
+  const moneyWithPrincipal = dashboardPayments.filter((payment) => confirmedPaymentIds.has(payment.id)).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
+  const moneyWithStaff = dashboardPayments.filter((payment) => !confirmedPaymentIds.has(payment.id)).reduce((sum, payment) => sum + numberValue(payment.amount_paid), 0);
+  const pendingHandovers = data.handovers.filter((handover) => handover.status === "pending" && (isReportViewer || handover.staff_id === data.profile.id));
   const studentsOwing = useMemo(() => {
     const expectedByStudent = new Map<string, number>();
     const paidByStudent = new Map<string, number>();
@@ -409,13 +414,14 @@ function OverviewView({
         <MetricCard label="Money with Principal" value={naira(moneyWithPrincipal)} helper="Confirmed handovers" tone="ink" />
         <MetricCard label="Money still with staff" value={naira(moneyWithStaff)} helper="Until Principal confirms" tone="rose" />
         <MetricCard label="Pending handovers" value={String(pendingHandovers.length)} helper="Need Principal action" tone="gold" />
-        <MetricCard label="Students owing" value={String(studentsOwing)} helper="Based on configured expected charges" tone="teal" />
+        <MetricCard label="Students owing" value={isReportViewer ? String(studentsOwing) : "—"} helper={isReportViewer ? "Based on configured expected charges" : "Principal report access required"} tone="teal" />
       </div>
 
       <section className="panel filters-panel">
         <div className="panel-heading"><div><span className="section-kicker">REPORT FILTERS</span><h2>See the right period</h2></div><span className="muted">Totals below follow these filters.</span></div>
         <div className="filter-row">
           <div className="segmented">{moneyFilters.map((filter) => <button key={filter.value} className={range === filter.value ? "active" : ""} onClick={() => setRange(filter.value)}>{filter.label}</button>)}</div>
+          {range === "date" && <TextField label="Date" type="date" value={selectedDate} onChange={setSelectedDate} />}
           <SelectField label="Session" value={selectedSession} onChange={(value) => { setSelectedSession(value); setSelectedTerm(data.terms.find((term) => term.session_id === value)?.id || ""); }}><option value="">All sessions</option>{data.sessions.map((session) => <option key={session.id} value={session.id}>{session.name}{session.active ? " · Active" : ""}</option>)}</SelectField>
           <SelectField label="Term" value={selectedTerm} onChange={setSelectedTerm}><option value="">All terms</option>{visibleTerms.map((term) => <option key={term.id} value={term.id}>{term.name}</option>)}</SelectField>
           <SelectField label="Class" value={selectedClass} onChange={setSelectedClass}><option value="">All classes</option>{data.classes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</SelectField>
