@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import "./accessibility.css";
 
 export const metadata: Metadata = {
   title: "Ilawo Financial Portal",
@@ -9,7 +10,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0d5c63",
+  themeColor: "#185e63",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
