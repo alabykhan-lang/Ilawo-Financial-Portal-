@@ -1,5 +1,5 @@
-import PortalShell from "@/components/PortalShell";
+import PrincipalPortal from "@/components/PrincipalPortal";
 
 export default function HomePage() {
-  return <PortalShell />;
+  return <PrincipalPortal />;
 }
