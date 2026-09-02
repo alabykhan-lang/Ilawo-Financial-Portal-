@@ -1,0 +1,91 @@
+:root {
+  --paper: #eef2ef;
+  --white: #fbfcfb;
+  --ink: #17353a;
+  --muted: #586a6f;
+  --line: #cfdad6;
+  --teal: #185e63;
+  --teal-dark: #103f43;
+  --teal-pale: #e3ece8;
+  --gold: #d4ad63;
+  --gold-pale: #f3ead8;
+  --rose-pale: #f4e7e5;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.55;
+  background: #eef2ef;
+}
+
+.main-content,
+html { background: #eef2ef; }
+
+.content-wrap { max-width: 1180px; }
+
+.page-header h1 { font-size: clamp(32px, 4vw, 42px); line-height: 1.08; }
+.page-header p { font-size: 17px; line-height: 1.55; color: #5a696d; }
+.section-kicker, .eyebrow { font-size: 13px; letter-spacing: .13em; }
+.brand-name { font-size: 14px; }
+.brand-location { font-size: 13px; }
+
+.field-label, .stack-form > label { font-size: 17px; gap: 9px; color: #425c62; }
+input, select, textarea {
+  min-height: 58px;
+  border-radius: 14px;
+  padding: 0 16px;
+  font-size: 18px;
+  background: #fff;
+  border-color: #cbd8d4;
+}
+textarea { min-height: 110px; padding-top: 14px; }
+.button { min-height: 56px; border-radius: 14px; font-size: 17px; padding: 0 20px; }
+.mode-tabs button, .segmented button { min-height: 50px; font-size: 16px; }
+.text-button, .logout-button { font-size: 15px; }
+
+.panel { border-radius: 22px; padding: 26px; background: #fbfcfb; }
+.panel-heading h2 { font-size: 26px; }
+.panel-heading h3 { font-size: 21px; }
+.muted, .helper-line { font-size: 15px; }
+
+.metric-card { min-height: 150px; padding: 21px; }
+.metric-card p { font-size: 15px; }
+.metric-card strong { font-size: clamp(24px, 3vw, 34px); }
+.metric-card span { font-size: 14px; }
+.category-card h3 { font-size: 19px; }
+.category-card > strong { font-size: 28px; }
+.category-card > p, .category-footer { font-size: 14px; }
+.badge { min-height: 29px; font-size: 13px; padding: 0 10px; }
+.status-counts strong { font-size: 22px; }
+.status-counts span { font-size: 13px; }
+.simple-list-row strong { font-size: 17px; }
+.simple-list-row span { font-size: 14px; }
+.batch-row strong { font-size: 17px; }
+.batch-row span { font-size: 14px; }
+.batch-row input { min-height: 50px; font-size: 17px; }
+
+.mobile-nav button { font-size: 13px; font-weight: 800; }
+.mobile-nav button span { font-size: 24px; }
+
+@media (max-width: 760px) {
+  .content-wrap { padding: 30px 28px 105px; }
+  .mobile-topbar { padding: 18px 28px; }
+  .page-header { margin-bottom: 28px; }
+  .page-header h1 { font-size: 38px; }
+  .page-header p { font-size: 18px; }
+  .mode-tabs { overflow-x: auto; justify-content: flex-start; }
+  .mode-tabs button { min-width: 124px; flex: 0 0 auto; }
+  .panel { padding: 28px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .metric-grid { grid-template-columns: 1fr 1fr; }
+  .category-grid { grid-template-columns: 1fr; }
+  .mobile-nav { min-height: 82px; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+}
+
+@media (max-width: 390px) {
+  .content-wrap { padding-left: 22px; padding-right: 22px; }
+  .mobile-topbar { padding-left: 22px; padding-right: 22px; }
+  .page-header h1 { font-size: 35px; }
+  .metric-grid { grid-template-columns: 1fr; }
+}
