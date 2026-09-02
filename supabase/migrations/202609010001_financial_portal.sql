@@ -271,6 +271,8 @@ create index if not exists payments_category_idx on public.student_payments(cate
 create index if not exists corrections_original_idx on public.payment_correction_requests(original_payment_id);
 create index if not exists handovers_staff_idx on public.handovers(staff_id, submitted_at desc);
 create index if not exists audit_created_idx on public.audit_logs(created_at desc);
+create unique index if not exists profiles_single_principal_idx
+  on public.profiles (role) where role = 'principal';
 
 insert into public.permissions (key, label, description) values
   ('record_student_payments', 'Record student payments', 'Create new locked payment records.'),
