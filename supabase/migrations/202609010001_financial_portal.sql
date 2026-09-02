@@ -66,8 +66,12 @@ create table if not exists public.academic_sessions (
   starts_on date,
   ends_on date,
   active boolean not null default true,
+  is_test boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+alter table public.academic_sessions
+  add column if not exists is_test boolean not null default false;
 
 create table if not exists public.terms (
   id uuid primary key default gen_random_uuid(),
@@ -135,11 +139,15 @@ create table if not exists public.student_payments (
   term_id uuid references public.terms(id) on delete restrict,
   note text,
   status public.payment_status not null default 'posted',
+  is_test boolean not null default false,
   is_correction boolean not null default false,
   correction_request_id uuid,
   origin_payment_id uuid references public.student_payments(id) on delete restrict,
   created_at timestamptz not null default now()
 );
+
+alter table public.student_payments
+  add column if not exists is_test boolean not null default false;
 
 create table if not exists public.payment_correction_requests (
   id uuid primary key default gen_random_uuid(),
@@ -285,7 +293,7 @@ on conflict (name) do update set display_order = excluded.display_order, active 
 
 insert into public.academic_sessions (name, starts_on, active)
 values ('2026/2027', '2026-09-01', true)
-on conflict (name) do update set active = true;
+on conflict (name) do update set active = true, is_test = false;
 
 insert into public.terms (session_id, name, display_order)
 select s.id, v.name, v.display_order
@@ -389,6 +397,7 @@ as $$
 declare
   v_student_class uuid;
   v_student_session uuid;
+  v_session_is_test boolean;
   v_term_session uuid;
   v_category_term boolean;
 begin
@@ -401,6 +410,10 @@ begin
   if v_student_session is null or v_student_session <> new.session_id then
     raise exception 'Student and academic session do not match';
   end if;
+  select is_test into v_session_is_test
+  from public.academic_sessions
+  where id = new.session_id;
+  new.is_test := coalesce(v_session_is_test, false);
   select applicable_to_term into v_category_term
   from public.financial_categories
   where id = new.category_id and (active or new.is_correction);
@@ -679,7 +692,7 @@ begin
   end if;
 
   update public.payment_correction_requests
-  set status = case when p_approve then 'approved' else 'rejected' end,
+  set status = (case when p_approve then 'approved' else 'rejected' end)::public.correction_status,
       reviewed_by = v_user,
       reviewed_at = now(),
       decision_note = nullif(trim(p_decision_note), '')
@@ -893,6 +906,41 @@ alter table public.personal_products enable row level security;
 alter table public.personal_sales enable row level security;
 alter table public.personal_expenses enable row level security;
 alter table public.audit_logs enable row level security;
+
+-- Policy definitions are replaced transactionally so this migration can be
+-- safely re-applied to an already-initialised project during deployment.
+drop policy if exists profiles_select on public.profiles;
+drop policy if exists permissions_select on public.permissions;
+drop policy if exists profile_permissions_select on public.profile_permissions;
+drop policy if exists classes_select on public.classes;
+drop policy if exists sessions_select on public.academic_sessions;
+drop policy if exists terms_select on public.terms;
+drop policy if exists categories_select on public.financial_categories;
+drop policy if exists categories_insert on public.financial_categories;
+drop policy if exists categories_update on public.financial_categories;
+drop policy if exists category_classes_select on public.financial_category_classes;
+drop policy if exists category_classes_insert on public.financial_category_classes;
+drop policy if exists category_classes_delete on public.financial_category_classes;
+drop policy if exists students_select on public.students;
+drop policy if exists students_insert on public.students;
+drop policy if exists students_update on public.students;
+drop policy if exists expected_charges_select on public.expected_charges;
+drop policy if exists expected_charges_insert on public.expected_charges;
+drop policy if exists expected_charges_update on public.expected_charges;
+drop policy if exists payments_select on public.student_payments;
+drop policy if exists payments_insert on public.student_payments;
+drop policy if exists correction_requests_select on public.payment_correction_requests;
+drop policy if exists correction_requests_insert on public.payment_correction_requests;
+drop policy if exists payment_corrections_select on public.payment_corrections;
+drop policy if exists handovers_select on public.handovers;
+drop policy if exists handover_items_select on public.handover_items;
+drop policy if exists personal_products_select on public.personal_products;
+drop policy if exists personal_products_insert on public.personal_products;
+drop policy if exists personal_products_update on public.personal_products;
+drop policy if exists personal_sales_select on public.personal_sales;
+drop policy if exists personal_expenses_select on public.personal_expenses;
+drop policy if exists personal_expenses_insert on public.personal_expenses;
+drop policy if exists audit_select on public.audit_logs;
 
 create policy profiles_select on public.profiles for select to authenticated
   using (id = (select auth.uid()) or private.has_permission('manage_staff'));

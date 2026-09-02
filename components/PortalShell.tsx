@@ -107,7 +107,7 @@ async function loadPortalData(client: AnyClient, user: User): Promise<PortalData
 
   const [classes, sessions, terms, categories, categoryClasses, students, charges, payments, corrections, handovers, handoverItems] = await Promise.all([
     fetchOptionalTable(client, "classes", "id,name,display_order,active"),
-    fetchOptionalTable(client, "academic_sessions", "id,name,starts_on,ends_on,active"),
+    fetchOptionalTable(client, "academic_sessions", "id,name,starts_on,ends_on,active,is_test"),
     fetchOptionalTable(client, "terms", "id,session_id,name,display_order,active"),
     fetchOptionalTable(client, "financial_categories", "id,name,applicable_to_term,active"),
     fetchOptionalTable(client, "financial_category_classes", "category_id,class_id"),
@@ -122,14 +122,24 @@ async function loadPortalData(client: AnyClient, user: User): Promise<PortalData
   const visibleProfiles = can("view_all_collections") || can("view_school_reports") || can("manage_staff")
     ? await fetchOptionalTable(client, "profiles", "id,full_name,email,role,active,staff_code")
     : [];
+  const portalSessions = (sessions as AcademicSession[]).filter((session) => !session.is_test);
+  const portalSessionIds = new Set(portalSessions.map((session) => session.id));
+  const portalStudents = (students as Student[]).filter((student) => portalSessionIds.has(student.academic_session_id));
+  const portalPayments = (payments as Payment[]).filter((payment) => portalSessionIds.has(payment.session_id));
+  const portalPaymentIds = new Set(portalPayments.map((payment) => payment.id));
+  const portalHandoverItems = (handoverItems as HandoverItem[]).filter((item) => portalPaymentIds.has(item.payment_id));
+  const portalHandoverIds = new Set(portalHandoverItems.map((item) => item.handover_id));
+  const portalHandovers = (handovers as Handover[]).filter((handover) => portalHandoverIds.has(handover.id));
+  const portalCorrections = (corrections as CorrectionRequest[]).filter((request) => portalPaymentIds.has(request.original_payment_id));
+  const portalCharges = (charges as ExpectedCharge[]).filter((charge) => portalSessionIds.has(charge.session_id));
   const classMap = new Map((classes as SchoolClass[]).map((item) => [item.id, item]));
-  const sessionMap = new Map((sessions as AcademicSession[]).map((item) => [item.id, item]));
+  const sessionMap = new Map(portalSessions.map((item) => [item.id, item]));
   const termMap = new Map((terms as Term[]).map((item) => [item.id, item]));
   const categoryMap = new Map((categories as FinancialCategory[]).map((item) => [item.id, item]));
-  const studentMap = new Map((students as Student[]).map((item) => [item.id, item]));
+  const studentMap = new Map(portalStudents.map((item) => [item.id, item]));
   const profileMap = new Map((visibleProfiles as Profile[]).map((item) => [item.id, item]));
-  const decoratedStudents = (students as Student[]).map((student) => ({ ...student, class: classMap.get(student.class_id) }));
-  const decoratedPayments = (payments as Payment[]).map((payment) => ({
+  const decoratedStudents = portalStudents.map((student) => ({ ...student, class: classMap.get(student.class_id) }));
+  const decoratedPayments = portalPayments.map((payment) => ({
     ...payment,
     amount_paid: numberValue(payment.amount_paid),
     student: studentMap.get(payment.student_id) ? { full_name: studentMap.get(payment.student_id)!.full_name, admission_no: studentMap.get(payment.student_id)!.admission_no } : undefined,
@@ -139,18 +149,18 @@ async function loadPortalData(client: AnyClient, user: User): Promise<PortalData
     session: sessionMap.get(payment.session_id) ? { name: sessionMap.get(payment.session_id)!.name } : undefined,
     term: payment.term_id && termMap.get(payment.term_id) ? { name: termMap.get(payment.term_id)!.name } : null,
   }));
-  const decoratedCorrections = (corrections as CorrectionRequest[]).map((request) => ({
+  const decoratedCorrections = portalCorrections.map((request) => ({
     ...request,
     requested_amount: request.requested_amount == null ? null : numberValue(request.requested_amount),
     original_payment: decoratedPayments.find((payment) => payment.id === request.original_payment_id),
   }));
-  const decoratedItems = (handoverItems as HandoverItem[]).map((item) => ({
+  const decoratedItems = portalHandoverItems.map((item) => ({
     ...item,
     amount: numberValue(item.amount),
     payment: decoratedPayments.find((payment) => payment.id === item.payment_id),
   }));
 
-  const decoratedHandovers = (handovers as Handover[]).map((handover) => ({
+  const decoratedHandovers = portalHandovers.map((handover) => ({
     ...handover,
     total_amount: numberValue(handover.total_amount),
     staff: profileMap.get(handover.staff_id) ? { full_name: profileMap.get(handover.staff_id)!.full_name } : undefined,
@@ -189,12 +199,12 @@ async function loadPortalData(client: AnyClient, user: User): Promise<PortalData
     profile,
     permissions: permissionRows as Permission[],
     classes: classes as SchoolClass[],
-    sessions: sessions as AcademicSession[],
+    sessions: portalSessions,
     terms: terms as Term[],
     categories: categories as FinancialCategory[],
     categoryClasses: categoryClasses as Array<{ category_id: string; class_id: string }>,
     students: decoratedStudents,
-    charges: charges as ExpectedCharge[],
+    charges: portalCharges,
     payments: decoratedPayments,
     corrections: decoratedCorrections,
     handovers: decoratedHandovers,

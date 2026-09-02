@@ -42,6 +42,7 @@ export interface AcademicSession {
   starts_on: string | null;
   ends_on: string | null;
   active: boolean;
+  is_test: boolean;
 }
 
 export interface Term {
@@ -94,6 +95,7 @@ export interface Payment {
   term_id: string | null;
   note: string | null;
   status: "posted";
+  is_test: boolean;
   is_correction: boolean;
   correction_request_id: string | null;
   origin_payment_id: string | null;
