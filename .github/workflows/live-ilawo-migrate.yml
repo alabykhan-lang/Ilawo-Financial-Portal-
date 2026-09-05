@@ -1,0 +1,167 @@
+name: Live Ilawo Supabase migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Dry-run first, then choose apply"
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - apply
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ilawo-live-database-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PGHOST: aws-0-eu-west-2.pooler.supabase.com
+      PGPORT: "5432"
+      PGDATABASE: postgres
+      PGUSER: postgres.swqvzqncjszzifzrjmcc
+      PGPASSWORD: ${{ secrets.ILAWO_DB_PASSWORD }}
+      PGSSLMODE: require
+
+    steps:
+      - name: Checkout verified migrations
+        uses: actions/checkout@v4
+
+      - name: Require database secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${PGPASSWORD:-}" ]; then
+            echo "Missing repository secret ILAWO_DB_PASSWORD."
+            echo "Add it under Repository Settings > Secrets and variables > Actions, then rerun this workflow."
+            exit 1
+          fi
+
+      - name: Verify connection and target project
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -Atqc "select current_database(), current_user, inet_server_addr() is not null;"
+          actual_user="$(psql -v ON_ERROR_STOP=1 -Atqc 'select current_user;')"
+          if [ "$actual_user" != "postgres.swqvzqncjszzifzrjmcc" ]; then
+            echo "Connected to an unexpected database user; refusing to continue."
+            exit 1
+          fi
+
+      - name: Show pending Ilawo migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort)
+          pending=0
+          log_exists="$(psql -v ON_ERROR_STOP=1 -Atqc "select to_regclass('private.portal_migration_log') is not null;")"
+
+          for file in "${files[@]}"; do
+            base="$(basename "$file")"
+            # Migration 001 is already live from the original production bootstrap.
+            if [ "$base" = "202609010001_financial_portal.sql" ]; then
+              echo "BASELINE  $base"
+              continue
+            fi
+
+            applied="f"
+            if [ "$log_exists" = "t" ]; then
+              applied="$(psql -v ON_ERROR_STOP=1 -Atqc "select exists(select 1 from private.portal_migration_log where version = '$base');")"
+            fi
+
+            if [ "$applied" = "t" ]; then
+              echo "APPLIED   $base"
+            else
+              echo "PENDING   $base"
+              pending=$((pending + 1))
+            fi
+          done
+
+          echo "Pending migration count: $pending"
+
+      - name: Stop after dry-run
+        if: ${{ inputs.mode == 'dry-run' }}
+        run: echo "Dry-run complete. No schema migration was applied. Rerun with mode=apply when ready."
+
+      - name: Apply pending migrations 002+
+        if: ${{ inputs.mode == 'apply' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          create schema if not exists private;
+          create table if not exists private.portal_migration_log (
+            version text primary key,
+            file_sha256 text not null,
+            applied_at timestamptz not null default now()
+          );
+          revoke all on private.portal_migration_log from public, anon, authenticated;
+          SQL
+
+          mapfile -t files < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort)
+          applied_count=0
+
+          for file in "${files[@]}"; do
+            base="$(basename "$file")"
+            if [ "$base" = "202609010001_financial_portal.sql" ]; then
+              echo "Skipping production baseline $base"
+              continue
+            fi
+
+            already="$(psql -v ON_ERROR_STOP=1 -Atqc "select exists(select 1 from private.portal_migration_log where version = '$base');")"
+            if [ "$already" = "t" ]; then
+              echo "Already applied: $base"
+              continue
+            fi
+
+            echo "Applying: $base"
+            psql -v ON_ERROR_STOP=1 -f "$file"
+            sha="$(sha256sum "$file" | awk '{print $1}')"
+            psql -v ON_ERROR_STOP=1 -v version="$base" -v sha="$sha" <<'SQL'
+            insert into private.portal_migration_log(version, file_sha256)
+            values (:'version', :'sha')
+            on conflict (version) do nothing;
+            SQL
+            applied_count=$((applied_count + 1))
+          done
+
+          echo "New migrations applied: $applied_count"
+
+      - name: Verify database readiness function
+        if: ${{ inputs.mode == 'apply' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          readiness="$(psql -v ON_ERROR_STOP=1 -Atqc 'select public.financial_portal_schema_readiness()::text;')"
+          echo "$readiness"
+          python - "$readiness" <<'PY'
+          import json, sys
+          data = json.loads(sys.argv[1])
+          if data.get('ready') is not True:
+              raise SystemExit('Database migrations ran, but schema readiness is still false.')
+          print('Database schema readiness: TRUE')
+          PY
+
+      - name: Verify production health endpoint
+        if: ${{ inputs.mode == 'apply' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl --fail --silent --show-error --retry 5 --retry-delay 2 https://ilawo-financial-portal.vercel.app/api/health/data-model)"
+          echo "$body"
+          python - "$body" <<'PY'
+          import json, sys
+          data = json.loads(sys.argv[1])
+          if data.get('ready') is not True:
+              raise SystemExit('Production health endpoint is not ready after migration.')
+          print('Production health endpoint: READY')
+          PY
