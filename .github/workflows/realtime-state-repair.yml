@@ -1,0 +1,110 @@
+name: One-time realtime state repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/realtime-state-repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Move realtime refresh inside Principal portal
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          portal = Path('components/PrincipalPortalV4.tsx')
+          text = portal.read_text()
+
+          anchor = '''  useEffect(() => {
+            if (!toast) return;
+            const t = setTimeout(() => setToast(null), 4500);
+            return () => clearTimeout(t);
+          }, [toast]);'''
+
+          realtime = '''  useEffect(() => {
+            if (!c || !u) return;
+
+            let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+            let lastRefreshAt = Date.now();
+
+            const requestRefresh = () => {
+              if (refreshTimer) clearTimeout(refreshTimer);
+              refreshTimer = setTimeout(() => {
+                lastRefreshAt = Date.now();
+                void refresh(c, u);
+              }, 650);
+            };
+
+            const channel = c
+              .channel("ilawo-principal-live-record-book")
+              .on("postgres_changes", { event: "*", schema: "public" }, requestRefresh)
+              .subscribe();
+
+            const refreshAfterBackground = () => {
+              if (document.visibilityState !== "visible") return;
+              if (Date.now() - lastRefreshAt >= 15_000) requestRefresh();
+            };
+
+            window.addEventListener("focus", refreshAfterBackground);
+            document.addEventListener("visibilitychange", refreshAfterBackground);
+
+            return () => {
+              if (refreshTimer) clearTimeout(refreshTimer);
+              window.removeEventListener("focus", refreshAfterBackground);
+              document.removeEventListener("visibilitychange", refreshAfterBackground);
+              void c.removeChannel(channel);
+            };
+          }, [c, u, refresh]);
+
+          useEffect(() => {
+            if (!toast) return;
+            const t = setTimeout(() => setToast(null), 4500);
+            return () => clearTimeout(t);
+          }, [toast]);'''
+
+          if anchor not in text:
+            raise SystemExit('Principal portal effect anchor was not found')
+          portal.write_text(text.replace(anchor, realtime, 1))
+
+          page = Path('app/page.tsx')
+          page.write_text('''import PrincipalPortalV4 from "@/components/PrincipalPortalV4";\n\nexport default function HomePage() {\n  return <PrincipalPortalV4 />;\n}\n''')
+
+          live = Path('components/PrincipalPortalLive.tsx')
+          if live.exists():
+            live.unlink()
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
+
+      - name: Commit verified repair
+        shell: bash
+        run: |
+          rm .github/workflows/realtime-state-repair.yml
+          git config user.name "Ilawo Portal Repair"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A components/PrincipalPortalV4.tsx components/PrincipalPortalLive.tsx app/page.tsx .github/workflows/realtime-state-repair.yml
+          git commit -m "[skip ci] Preserve Principal screen during realtime refresh"
+          git push origin HEAD:main
