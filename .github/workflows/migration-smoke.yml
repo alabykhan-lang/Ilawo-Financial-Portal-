@@ -68,7 +68,9 @@ jobs:
           returns uuid
           language sql
           stable
-          as $$ select null::uuid $$;
+          as $$
+            select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
+          $$;
           SQL
 
       - name: Apply complete migration chain
@@ -116,10 +118,129 @@ jobs:
           end
           $$;
 
-          select name, candidate_scope
-          from public.financial_categories
-          where active
-          order by name;
+          do $$
+          begin
+            if not exists (
+              select 1 from public.financial_categories
+              where upper(name) = 'U.P.E' and active and candidate_scope = 'internal_only'
+            ) then
+              raise exception 'U.P.E category normalization failed';
+            end if;
+            if exists (
+              select 1 from public.financial_categories
+              where upper(name) = 'JUPEB' and active
+            ) then
+              raise exception 'Legacy JUPEB category is still active';
+            end if;
+            if exists (
+              select 1 from public.financial_categories
+              where upper(name) in ('WAEC','NECO') and candidate_scope <> 'mixed'
+            ) then
+              raise exception 'WAEC/NECO mixed-candidate scope is incorrect';
+            end if;
+            if exists (
+              select 1 from public.financial_categories
+              where upper(name) not in ('WAEC','NECO') and candidate_scope <> 'internal_only'
+            ) then
+              raise exception 'A non-WAEC/NECO category was incorrectly marked mixed';
+            end if;
+          end
+          $$;
+          SQL
+
+      - name: Exercise Principal financial integrity rules
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', false);
+
+          insert into auth.users(id, email, raw_user_meta_data)
+          values ('11111111-1111-4111-8111-111111111111', 'principal-smoke@example.invalid', '{"full_name":"Principal Smoke"}')
+          on conflict (id) do nothing;
+
+          update public.profiles
+          set role = 'principal', active = true
+          where id = '11111111-1111-4111-8111-111111111111';
+
+          do $$
+          declare
+            v_session uuid;
+            v_ss2 uuid;
+            v_jss1 uuid;
+            v_jss2 uuid;
+            v_waec uuid;
+            v_bece uuid;
+            v_student uuid;
+            v_history_student uuid;
+            v_payment uuid;
+            v_scope text;
+          begin
+            select id into v_session from public.academic_sessions where name = '2026/2027' limit 1;
+            select id into v_ss2 from public.classes where name = 'SS2' limit 1;
+            select id into v_jss1 from public.classes where name = 'JSS1' limit 1;
+            select id into v_jss2 from public.classes where name = 'JSS2' limit 1;
+            select id into v_waec from public.financial_categories where upper(name) = 'WAEC' and active limit 1;
+            select id into v_bece from public.financial_categories where upper(name) = 'BECE' and active limit 1;
+
+            insert into public.students(admission_no, full_name, class_id, academic_session_id, status)
+            values ('SMOKE-SS2-001', 'Smoke WAEC Student', v_ss2, v_session, 'active')
+            returning id into v_student;
+
+            begin
+              insert into public.student_payments(student_id, class_id, category_id, amount_paid, payment_date, session_id)
+              values (v_student, v_ss2, v_waec, 1000, current_date, v_session);
+              raise exception 'WAEC payment guard failed: unregistered candidate payment was accepted';
+            exception
+              when others then
+                if sqlerrm not like 'Student is not registered as an internal WAEC candidate%' then
+                  raise;
+                end if;
+            end;
+
+            insert into public.category_candidates(category_id, student_id, session_id)
+            values (v_waec, v_student, v_session);
+
+            insert into public.student_payments(student_id, class_id, category_id, amount_paid, payment_date, session_id)
+            values (v_student, v_ss2, v_waec, 1000, current_date, v_session)
+            returning id into v_payment;
+
+            if v_payment is null then
+              raise exception 'Registered WAEC candidate payment was not created';
+            end if;
+
+            begin
+              insert into public.external_candidates(full_name, category_id, session_id, class_level, expected_amount)
+              values ('Invalid BECE External', v_bece, v_session, 'JSS3', 500);
+              raise exception 'External-candidate guard failed: BECE external candidate was accepted';
+            exception
+              when others then
+                if sqlerrm not like 'External candidates are only allowed for WAEC and NECO%' then
+                  raise;
+                end if;
+            end;
+
+            insert into public.external_candidates(full_name, category_id, session_id, class_level, expected_amount)
+            values ('Valid WAEC External', v_waec, v_session, 'SS3', 2500);
+
+            insert into public.financial_categories(name, applicable_to_term, basis, candidate_scope, active)
+            values ('Development Levy Smoke', true, 'term', 'mixed', true)
+            returning candidate_scope into v_scope;
+
+            if v_scope <> 'internal_only' then
+              raise exception 'Category scope guard did not force a custom category to internal_only';
+            end if;
+
+            insert into public.students(admission_no, full_name, class_id, academic_session_id, status)
+            values ('SMOKE-HISTORY-001', 'Smoke History Student', v_jss1, v_session, 'active')
+            returning id into v_history_student;
+
+            update public.students set class_id = v_jss2 where id = v_history_student;
+
+            if (select count(*) from public.student_enrollment_history where student_id = v_history_student) < 2 then
+              raise exception 'Student enrollment history did not capture create + class change';
+            end if;
+          end
+          $$;
           SQL
 
       - name: Reapply migration chain to prove retry safety
