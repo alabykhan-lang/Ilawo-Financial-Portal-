@@ -16,14 +16,15 @@ declare
     'financial_category_classes',
     'expected_charges',
     'student_payments',
+    'payment_correction_requests',
     'payment_corrections',
     'category_candidates',
     'external_candidates',
     'external_candidate_payments',
     'school_expenses',
-    'personal_business',
-    'personal_business_income',
-    'personal_business_expenses'
+    'personal_products',
+    'personal_sales',
+    'personal_expenses'
   ];
 begin
   if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
