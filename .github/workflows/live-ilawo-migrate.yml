@@ -11,6 +11,10 @@ on:
         options:
           - dry-run
           - apply
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/live-ilawo-migrate.yml'
 
 permissions:
   contents: read
@@ -24,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
+      RUN_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'apply' }}
       PGHOST: aws-0-eu-west-2.pooler.supabase.com
       PGPORT: "5432"
       PGDATABASE: postgres
@@ -41,7 +46,6 @@ jobs:
           set -euo pipefail
           if [ -z "${PGPASSWORD:-}" ]; then
             echo "Missing repository secret ILAWO_DB_PASSWORD."
-            echo "Add it under Repository Settings > Secrets and variables > Actions, then rerun this workflow."
             exit 1
           fi
 
@@ -66,7 +70,6 @@ jobs:
 
           for file in "${files[@]}"; do
             base="$(basename "$file")"
-            # Migration 001 is already live from the original production bootstrap.
             if [ "$base" = "202609010001_financial_portal.sql" ]; then
               echo "BASELINE  $base"
               continue
@@ -88,11 +91,11 @@ jobs:
           echo "Pending migration count: $pending"
 
       - name: Stop after dry-run
-        if: ${{ inputs.mode == 'dry-run' }}
-        run: echo "Dry-run complete. No schema migration was applied. Rerun with mode=apply when ready."
+        if: ${{ env.RUN_MODE == 'dry-run' }}
+        run: echo "Dry-run complete. No schema migration was applied."
 
       - name: Apply pending migrations 002+
-        if: ${{ inputs.mode == 'apply' }}
+        if: ${{ env.RUN_MODE == 'apply' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -137,7 +140,7 @@ jobs:
           echo "New migrations applied: $applied_count"
 
       - name: Verify database readiness function
-        if: ${{ inputs.mode == 'apply' }}
+        if: ${{ env.RUN_MODE == 'apply' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -152,7 +155,7 @@ jobs:
           PY
 
       - name: Verify production health endpoint
-        if: ${{ inputs.mode == 'apply' }}
+        if: ${{ env.RUN_MODE == 'apply' }}
         shell: bash
         run: |
           set -euo pipefail
