@@ -9,6 +9,19 @@ export async function GET() {
   const { url, key } = getPublicSupabaseConfig();
   const client = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 
+  // Once migration 009 is live, this SECURITY DEFINER function checks only
+  // schema metadata and returns booleans. It never exposes financial rows.
+  const readiness = await client.rpc("financial_portal_schema_readiness");
+  if (!readiness.error && readiness.data && typeof readiness.data === "object") {
+    const payload = readiness.data as { ready?: boolean; checks?: Record<string, unknown> };
+    return NextResponse.json(
+      { ok: true, ready: Boolean(payload.ready), checks: payload.checks || {} },
+      { headers: { "cache-control": "no-store" } },
+    );
+  }
+
+  // Rollout fallback: keep the older structural checks useful until migration 009
+  // itself exists in the live database.
   async function table(name: string) {
     const { error } = await client.from(name).select("id").limit(1);
     return { ready: !error, error: error?.code || null };
@@ -42,6 +55,7 @@ export async function GET() {
   ]);
 
   const checks = {
+    schemaReadinessRpc: { ready: false, error: readiness.error?.code || null },
     settings,
     expenses,
     internalCandidates,
