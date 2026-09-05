@@ -1,0 +1,165 @@
+name: Financial correction smoke test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+      - '.github/workflows/correction-smoke.yml'
+  pull_request:
+    paths:
+      - 'supabase/migrations/**'
+      - '.github/workflows/correction-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  corrections:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      PGPASSWORD: postgres
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGDATABASE: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bootstrap Supabase auth stubs
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
+            if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+          end
+          $$;
+          create schema if not exists auth;
+          create table if not exists auth.users (
+            id uuid primary key,
+            email text,
+            raw_user_meta_data jsonb not null default '{}'::jsonb
+          );
+          create or replace function auth.uid()
+          returns uuid language sql stable
+          as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+          SQL
+
+      - name: Apply migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in $(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort); do
+            psql -v ON_ERROR_STOP=1 -f "$file"
+          done
+
+      - name: Exercise internal, external and expense corrections
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          select set_config('request.jwt.claim.sub', '22222222-2222-4222-8222-222222222222', false);
+
+          insert into auth.users(id, email, raw_user_meta_data)
+          values ('22222222-2222-4222-8222-222222222222', 'correction-principal@example.invalid', '{"full_name":"Correction Principal"}');
+          update public.profiles
+          set role='principal', active=true
+          where id='22222222-2222-4222-8222-222222222222';
+
+          do $$
+          declare
+            v_session uuid;
+            v_ss2 uuid;
+            v_waec uuid;
+            v_student uuid;
+            v_payment uuid;
+            v_current_payment uuid;
+            v_external uuid;
+            v_external_payment uuid;
+            v_current_external uuid;
+            v_expense uuid;
+            v_current_expense uuid;
+            v_amount numeric;
+          begin
+            select id into v_session from public.academic_sessions where name='2026/2027' limit 1;
+            select id into v_ss2 from public.classes where name='SS2' limit 1;
+            select id into v_waec from public.financial_categories where upper(name)='WAEC' and active limit 1;
+
+            insert into public.students(admission_no, full_name, class_id, academic_session_id, status)
+            values ('CORR-SS2-001','Correction Internal Student',v_ss2,v_session,'active')
+            returning id into v_student;
+            insert into public.category_candidates(category_id,student_id,session_id)
+            values (v_waec,v_student,v_session);
+            insert into public.student_payments(student_id,class_id,category_id,amount_paid,payment_date,session_id)
+            values (v_student,v_ss2,v_waec,1000,current_date,v_session)
+            returning id into v_payment;
+
+            perform public.principal_correct_payment(v_payment,'correct',1250,'Correct internal amount');
+            select id,amount_paid into v_current_payment,v_amount
+            from public.effective_payment_ledger where student_id=v_student;
+            if v_amount <> 1250 then raise exception 'Internal payment correction did not replace effective amount'; end if;
+            if exists(select 1 from public.effective_payment_ledger where id=v_payment) then
+              raise exception 'Original internal payment remained effective after correction';
+            end if;
+            perform public.principal_correct_payment(v_current_payment,'reverse',null,'Reverse corrected internal entry');
+            if exists(select 1 from public.effective_payment_ledger where student_id=v_student) then
+              raise exception 'Internal payment reversal did not remove effective entry';
+            end if;
+
+            insert into public.external_candidates(full_name,category_id,session_id,class_level,expected_amount)
+            values ('Correction External Candidate',v_waec,v_session,'SS3',3000)
+            returning id into v_external;
+            insert into public.external_candidate_payments(external_candidate_id,category_id,amount_paid,payment_date,session_id)
+            values (v_external,v_waec,700,current_date,v_session)
+            returning id into v_external_payment;
+
+            perform public.principal_correct_external_payment(v_external_payment,'correct',900,'Correct external amount');
+            select id,amount_paid into v_current_external,v_amount
+            from public.effective_external_candidate_payment_ledger
+            where external_candidate_id=v_external;
+            if v_amount <> 900 then raise exception 'External correction did not replace effective amount'; end if;
+            if exists(select 1 from public.effective_external_candidate_payment_ledger where id=v_external_payment) then
+              raise exception 'Original external payment remained effective after correction';
+            end if;
+            perform public.principal_correct_external_payment(v_current_external,'reverse',null,'Reverse corrected external entry');
+            if exists(select 1 from public.effective_external_candidate_payment_ledger where external_candidate_id=v_external) then
+              raise exception 'External payment reversal did not remove effective entry';
+            end if;
+
+            insert into public.school_expenses(category_id,expense_type,description,amount,expense_date,session_id)
+            values (v_waec,'Registration / Remittance','Correction smoke expense',500,current_date,v_session)
+            returning id into v_expense;
+
+            perform public.principal_correct_expense(v_expense,'correct',650,'Correct expense amount');
+            select id,amount into v_current_expense,v_amount
+            from public.effective_school_expense_ledger
+            where category_id=v_waec and description='Correction smoke expense';
+            if v_amount <> 650 then raise exception 'Expense correction did not replace effective amount'; end if;
+            if exists(select 1 from public.effective_school_expense_ledger where id=v_expense) then
+              raise exception 'Original expense remained effective after correction';
+            end if;
+            perform public.principal_correct_expense(v_current_expense,'reverse',null,'Reverse corrected expense entry');
+            if exists(
+              select 1 from public.effective_school_expense_ledger
+              where category_id=v_waec and description='Correction smoke expense'
+            ) then raise exception 'Expense reversal did not remove effective entry'; end if;
+          end
+          $$;
+          SQL
