@@ -1,0 +1,132 @@
+name: Migration smoke test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+      - '.github/workflows/migration-smoke.yml'
+  pull_request:
+    paths:
+      - 'supabase/migrations/**'
+
+permissions:
+  contents: read
+
+jobs:
+  sql-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      PGPASSWORD: postgres
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGDATABASE: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bootstrap minimal Supabase-compatible auth objects
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if not exists (select 1 from pg_roles where rolname = 'anon') then
+              create role anon nologin;
+            end if;
+            if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+              create role authenticated nologin;
+            end if;
+          end
+          $$;
+
+          create schema if not exists auth;
+
+          create table if not exists auth.users (
+            id uuid primary key,
+            email text,
+            raw_user_meta_data jsonb not null default '{}'::jsonb
+          );
+
+          create or replace function auth.uid()
+          returns uuid
+          language sql
+          stable
+          as $$ select null::uuid $$;
+          SQL
+
+      - name: Apply complete migration chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in $(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort); do
+            echo "Applying ${file}"
+            psql -v ON_ERROR_STOP=1 -f "$file"
+          done
+
+      - name: Verify required Principal record-book objects
+        shell: bash
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            missing text[] := '{}'::text[];
+          begin
+            if to_regclass('public.portal_settings') is null then missing := array_append(missing, 'portal_settings'); end if;
+            if to_regclass('public.school_expenses') is null then missing := array_append(missing, 'school_expenses'); end if;
+            if to_regclass('public.category_candidates') is null then missing := array_append(missing, 'category_candidates'); end if;
+            if to_regclass('public.external_candidates') is null then missing := array_append(missing, 'external_candidates'); end if;
+            if to_regclass('public.external_candidate_payments') is null then missing := array_append(missing, 'external_candidate_payments'); end if;
+            if to_regclass('public.student_enrollment_history') is null then missing := array_append(missing, 'student_enrollment_history'); end if;
+
+            if not exists (
+              select 1 from information_schema.columns
+              where table_schema='public' and table_name='financial_categories' and column_name='basis'
+            ) then missing := array_append(missing, 'financial_categories.basis'); end if;
+
+            if not exists (
+              select 1 from information_schema.columns
+              where table_schema='public' and table_name='financial_categories' and column_name='candidate_scope'
+            ) then missing := array_append(missing, 'financial_categories.candidate_scope'); end if;
+
+            if not exists (
+              select 1 from information_schema.columns
+              where table_schema='public' and table_name='students' and column_name='guardian_phone'
+            ) then missing := array_append(missing, 'students.guardian_phone'); end if;
+
+            if cardinality(missing) > 0 then
+              raise exception 'Missing required objects: %', array_to_string(missing, ', ');
+            end if;
+          end
+          $$;
+
+          select name, candidate_scope
+          from public.financial_categories
+          where active
+          order by name;
+          SQL
+
+      - name: Reapply migration chain to prove retry safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in $(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort); do
+            echo "Reapplying ${file}"
+            psql -v ON_ERROR_STOP=1 -f "$file"
+          done
