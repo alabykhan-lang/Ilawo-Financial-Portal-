@@ -29,11 +29,8 @@ jobs:
     timeout-minutes: 20
     env:
       RUN_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'apply' }}
-      PGHOST: aws-0-eu-west-2.pooler.supabase.com
-      PGPORT: "5432"
-      PGDATABASE: postgres
-      PGUSER: postgres.swqvzqncjszzifzrjmcc
       PGPASSWORD: ${{ secrets.ILAWO_DB_PASSWORD }}
+      PGDATABASE: postgres
       PGSSLMODE: require
 
     steps:
@@ -49,14 +46,44 @@ jobs:
             exit 1
           fi
 
-      - name: Verify connection and target project
+      - name: Select a working Ilawo database endpoint
         shell: bash
         run: |
           set -euo pipefail
-          psql -v ON_ERROR_STOP=1 -Atqc "select current_database(), current_user, inet_server_addr() is not null;"
-          actual_user="$(psql -v ON_ERROR_STOP=1 -Atqc 'select current_user;')"
-          if [ "$actual_user" != "postgres.swqvzqncjszzifzrjmcc" ]; then
-            echo "Connected to an unexpected database user; refusing to continue."
+
+          try_endpoint() {
+            local host="$1"
+            local port="$2"
+            local user="$3"
+            local label="$4"
+            echo "Trying ${label}..."
+            if PGHOST="$host" PGPORT="$port" PGUSER="$user" psql -v ON_ERROR_STOP=1 -Atqc "select current_database(), current_user;" >/tmp/ilawo-connection.txt 2>/tmp/ilawo-connection.err; then
+              echo "PGHOST=$host" >> "$GITHUB_ENV"
+              echo "PGPORT=$port" >> "$GITHUB_ENV"
+              echo "PGUSER=$user" >> "$GITHUB_ENV"
+              echo "ILAWO_ENDPOINT=$label" >> "$GITHUB_ENV"
+              echo "Connected successfully through ${label}."
+              cat /tmp/ilawo-connection.txt
+              return 0
+            fi
+            echo "${label} did not authenticate/connect."
+            sed -E 's/(password=)[^ ]+/\1***/g' /tmp/ilawo-connection.err || true
+            return 1
+          }
+
+          try_endpoint "db.swqvzqncjszzifzrjmcc.supabase.co" "5432" "postgres" "direct-5432" \
+            || try_endpoint "aws-0-eu-west-2.pooler.supabase.com" "5432" "postgres.swqvzqncjszzifzrjmcc" "session-pooler-5432" \
+            || try_endpoint "aws-0-eu-west-2.pooler.supabase.com" "6543" "postgres.swqvzqncjszzifzrjmcc" "transaction-pooler-6543" \
+            || { echo "No Supabase PostgreSQL endpoint accepted the configured database secret."; exit 1; }
+
+      - name: Verify target schema baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -Atqc "select to_regclass('public.student_payments') is not null, to_regclass('public.financial_categories') is not null;"
+          baseline="$(psql -v ON_ERROR_STOP=1 -Atqc "select (to_regclass('public.student_payments') is not null and to_regclass('public.financial_categories') is not null);")"
+          if [ "$baseline" != "t" ]; then
+            echo "Connected database does not contain the Ilawo baseline schema; refusing to migrate."
             exit 1
           fi
 
