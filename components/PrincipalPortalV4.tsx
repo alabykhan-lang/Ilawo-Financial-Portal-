@@ -1019,6 +1019,41 @@ export default function PrincipalPortalV4() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  useEffect(() => {
+    if (!c || !u) return;
+
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastRefreshAt = Date.now();
+
+    const requestRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        lastRefreshAt = Date.now();
+        void refresh(c, u);
+      }, 650);
+    };
+
+    const channel = c
+      .channel("ilawo-principal-live-record-book")
+      .on("postgres_changes", { event: "*", schema: "public" }, requestRefresh)
+      .subscribe();
+
+    const refreshAfterBackground = () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastRefreshAt >= 15_000) requestRefresh();
+    };
+
+    window.addEventListener("focus", refreshAfterBackground);
+    document.addEventListener("visibilitychange", refreshAfterBackground);
+
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      window.removeEventListener("focus", refreshAfterBackground);
+      document.removeEventListener("visibilitychange", refreshAfterBackground);
+      void c.removeChannel(channel);
+    };
+  }, [c, u, refresh]);
+
   if (!u || !c) return <Login c={c} />;
   if (loading) return <main className="loading-page"><Brand small /><div className="loading-spinner" /><p>Opening your financial record book…</p></main>;
   if (error || !d) return <main className="loading-page"><Brand small /><div className="setup-alert"><strong>Portal could not be loaded</strong><p>{error}</p></div><button className="button ghost" onClick={() => void c.auth.signOut()}>Sign out</button></main>;

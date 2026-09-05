@@ -1,5 +1,5 @@
-import PrincipalPortalLive from "@/components/PrincipalPortalLive";
+import PrincipalPortalV4 from "@/components/PrincipalPortalV4";
 
 export default function HomePage() {
-  return <PrincipalPortalLive />;
+  return <PrincipalPortalV4 />;
 }
