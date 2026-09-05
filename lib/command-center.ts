@@ -252,8 +252,8 @@ async function categorySummary(client: AnyClient, category: Row, session: Row, t
   let q = client.from("effective_payment_ledger").select("amount_paid,student_id,payment_date,class_id").eq("category_id", category.id).eq("session_id", session.id);
   if (b === "term" && term?.id) q = q.eq("term_id", term.id);
   const internalPayments = (await q).data || [];
-  const externalPayments = mixed ? ((await client.from("external_candidate_payments").select("amount_paid,external_candidate_id,payment_date").eq("category_id", category.id).eq("session_id", session.id)).data || []) : [];
-  let eq = client.from("school_expenses").select("amount,expense_type,description,expense_date").eq("category_id", category.id).eq("session_id", session.id);
+  const externalPayments = mixed ? ((await client.from("effective_external_candidate_payment_ledger").select("amount_paid,external_candidate_id,payment_date").eq("category_id", category.id).eq("session_id", session.id)).data || []) : [];
+  let eq = client.from("effective_school_expense_ledger").select("amount,expense_type,description,expense_date").eq("category_id", category.id).eq("session_id", session.id);
   if (b === "term" && term?.id) eq = eq.eq("term_id", term.id);
   const expenses = (await eq).data || [];
 
