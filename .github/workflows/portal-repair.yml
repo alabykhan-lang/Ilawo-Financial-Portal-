@@ -1,0 +1,110 @@
+name: One-time principal portal repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/portal-repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Apply focused portal repairs
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          portal = Path('components/PrincipalPortalV4.tsx')
+          text = portal.read_text()
+
+          old = '''            {[...s.ip.map((p) => ({ ...p, who: d.students.find((x) => x.id === p.student_id)?.full_name || "Student" })), ...s.ep.map((p) => ({ ...p, who: d.external.find((x) => x.id === p.external_candidate_id)?.full_name || "External candidate" }))]
+              .sort((a, b) => String(b.payment_date).localeCompare(String(a.payment_date)))'''
+          new = '''            {([...s.ip.map((p: R) => ({ ...p, who: d.students.find((x) => x.id === p.student_id)?.full_name || "Student" })), ...s.ep.map((p: R) => ({ ...p, who: d.external.find((x) => x.id === p.external_candidate_id)?.full_name || "External candidate" }))] as R[])
+              .sort((a, b) => String(b.payment_date).localeCompare(String(a.payment_date)))'''
+          if old not in text:
+              raise SystemExit('Recent-payment typing target was not found')
+          text = text.replace(old, new, 1)
+
+          old = '''            {mixed ? (
+              <>
+                <button><strong>{s.internalCount}</strong><span>Internal</span></button>
+                <button><strong>{s.externalCount}</strong><span>External</span></button>
+                <button><strong>{s.fully}</strong><span>Fully paid</span></button>
+              </>
+            ) : ('''
+          new = '''            {mixed ? (
+              <>
+                <button><strong>{s.internalCount}</strong><span>Internal</span></button>
+                <button><strong>{s.externalCount}</strong><span>External</span></button>
+                <button><strong>{s.fully}</strong><span>Fully paid</span></button>
+                <button><strong>{s.part}</strong><span>Partly paid</span></button>
+                <button><strong>{s.unpaid}</strong><span>Not paid</span></button>
+              </>
+            ) : ('''
+          if old not in text:
+              raise SystemExit('Mixed status target was not found')
+          text = text.replace(old, new, 1)
+
+          old = '''  const examStudents = d.students.filter((s) => s.academic_session_id === session && (!examClass || s.class_id === examClass));
+  const registeredIds = new Set(d.candidates.filter((x) => x.category_id === examCat && x.session_id === session).map((x) => x.student_id));'''
+          new = '''  const examEligibleClassIds = new Set(d.categoryClasses.filter((x) => x.category_id === examCat).map((x) => x.class_id));
+  const examStudents = d.students.filter(
+    (s) => s.academic_session_id === session && (!examCat || examEligibleClassIds.has(s.class_id)) && (!examClass || s.class_id === examClass),
+  );
+  const registeredIds = new Set(d.candidates.filter((x) => x.category_id === examCat && x.session_id === session).map((x) => x.student_id));'''
+          if old not in text:
+              raise SystemExit('Exam eligibility target was not found')
+          text = text.replace(old, new, 1)
+
+          old = '''        <div className="table-scroll"><table><thead><tr><th>Category</th><th>Candidates / Students</th><th>Collected</th><th>Expenses</th><th>Net balance</th></tr></thead><tbody>{rows.map(({ c, s }) => <tr key={c.id}><td><strong>{categoryName(c)}</strong></td><td>{isMixed(c) ? `${s.internalCount} internal · ${s.externalCount} external` : `${s.internalCount} internal`}</td><td>{naira(s.collected)}</td><td>{naira(s.spent)}</td><td><strong>{naira(s.collected - s.spent)}</strong></td></tr>)}</tbody></table></div>'''
+          new = '''        <div className="table-scroll"><table><thead><tr><th>Category</th><th>Candidates / Students</th><th>Payment status</th><th>Collected</th><th>Expenses</th><th>Net balance</th></tr></thead><tbody>{rows.map(({ c, s }) => <tr key={c.id}><td><strong>{categoryName(c)}</strong></td><td>{isMixed(c) ? `${s.internalCount} internal · ${s.externalCount} external` : `${s.internalCount} internal`}</td><td>{s.fully} full · {s.part} part · {s.unpaid} unpaid</td><td>{naira(s.collected)}</td><td>{naira(s.spent)}</td><td><strong>{naira(s.collected - s.spent)}</strong></td></tr>)}</tbody></table></div>'''
+          if old not in text:
+              raise SystemExit('Report table target was not found')
+          text = text.replace(old, new, 1)
+
+          portal.write_text(text)
+
+          config = Path('next.config.ts')
+          ctext = config.read_text()
+          old = '''  poweredByHeader: false,
+  typescript: {
+    ignoreBuildErrors: true,
+  },'''
+          new = '''  poweredByHeader: false,'''
+          if old not in ctext:
+              raise SystemExit('TypeScript bypass target was not found')
+          config.write_text(ctext.replace(old, new, 1))
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
+
+      - name: Commit verified repair
+        shell: bash
+        run: |
+          rm .github/workflows/portal-repair.yml
+          git config user.name "Ilawo Portal Repair"
+          git config user.email "actions@users.noreply.github.com"
+          git add components/PrincipalPortalV4.tsx next.config.ts .github/workflows/portal-repair.yml
+          git commit -m "[skip ci] Repair Principal portal typing and reporting"
+          git push origin HEAD:main
