@@ -1,5 +1,5 @@
-import PrincipalPortalV3 from "@/components/PrincipalPortalV3";
+import PrincipalPortalV4 from "@/components/PrincipalPortalV4";
 
 export default function HomePage() {
-  return <PrincipalPortalV3 />;
+  return <PrincipalPortalV4 />;
 }
