@@ -335,6 +335,8 @@ function Home({ d, go }: { d: Data; go: (t: Tab) => void }) {
                 <button><strong>{s.internalCount}</strong><span>Internal</span></button>
                 <button><strong>{s.externalCount}</strong><span>External</span></button>
                 <button><strong>{s.fully}</strong><span>Fully paid</span></button>
+                <button><strong>{s.part}</strong><span>Partly paid</span></button>
+                <button><strong>{s.unpaid}</strong><span>Not paid</span></button>
               </>
             ) : (
               <>
@@ -353,7 +355,7 @@ function Home({ d, go }: { d: Data; go: (t: Tab) => void }) {
         <div className="two-column">
           <section className="panel">
             <div className="panel-heading"><h2>Recent payments</h2></div>
-            {[...s.ip.map((p) => ({ ...p, who: d.students.find((x) => x.id === p.student_id)?.full_name || "Student" })), ...s.ep.map((p) => ({ ...p, who: d.external.find((x) => x.id === p.external_candidate_id)?.full_name || "External candidate" }))]
+            {([...s.ip.map((p: R) => ({ ...p, who: d.students.find((x) => x.id === p.student_id)?.full_name || "Student" })), ...s.ep.map((p: R) => ({ ...p, who: d.external.find((x) => x.id === p.external_candidate_id)?.full_name || "External candidate" }))] as R[])
               .sort((a, b) => String(b.payment_date).localeCompare(String(a.payment_date)))
               .slice(0, 10)
               .map((p) => <div className="simple-list-row" key={p.id}><div><strong>{p.who}</strong><span>{shortDate(p.payment_date)}</span></div><b>{naira(p.amount_paid)}</b></div>)}
@@ -787,7 +789,7 @@ function Reports({ d }: { d: Data }) {
       </section>
       <div className="metric-grid"><Metric label="Collected" value={naira(total)} /><Metric label="Expenses" value={naira(spent)} tone="rose" /><Metric label="Net balance" value={naira(total - spent)} tone="ink" /></div>
       <section className="panel">
-        <div className="table-scroll"><table><thead><tr><th>Category</th><th>Candidates / Students</th><th>Collected</th><th>Expenses</th><th>Net balance</th></tr></thead><tbody>{rows.map(({ c, s }) => <tr key={c.id}><td><strong>{categoryName(c)}</strong></td><td>{isMixed(c) ? `${s.internalCount} internal · ${s.externalCount} external` : `${s.internalCount} internal`}</td><td>{naira(s.collected)}</td><td>{naira(s.spent)}</td><td><strong>{naira(s.collected - s.spent)}</strong></td></tr>)}</tbody></table></div>
+        <div className="table-scroll"><table><thead><tr><th>Category</th><th>Candidates / Students</th><th>Payment status</th><th>Collected</th><th>Expenses</th><th>Net balance</th></tr></thead><tbody>{rows.map(({ c, s }) => <tr key={c.id}><td><strong>{categoryName(c)}</strong></td><td>{isMixed(c) ? `${s.internalCount} internal · ${s.externalCount} external` : `${s.internalCount} internal`}</td><td>{s.fully} full · {s.part} part · {s.unpaid} unpaid</td><td>{naira(s.collected)}</td><td>{naira(s.spent)}</td><td><strong>{naira(s.collected - s.spent)}</strong></td></tr>)}</tbody></table></div>
       </section>
     </div>
   );
@@ -807,7 +809,10 @@ function Settings({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () 
   const [examClass, setExamClass] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const examStudents = d.students.filter((s) => s.academic_session_id === session && (!examClass || s.class_id === examClass));
+  const examEligibleClassIds = new Set(d.categoryClasses.filter((x) => x.category_id === examCat).map((x) => x.class_id));
+  const examStudents = d.students.filter(
+    (s) => s.academic_session_id === session && (!examCat || examEligibleClassIds.has(s.class_id)) && (!examClass || s.class_id === examClass),
+  );
   const registeredIds = new Set(d.candidates.filter((x) => x.category_id === examCat && x.session_id === session).map((x) => x.student_id));
 
   async function savePeriod() {
