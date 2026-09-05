@@ -31,117 +31,115 @@ jobs:
           path = Path('lib/command-center-extended.ts')
           text = path.read_text()
 
-          tool_marker = '''  {
-            name: "promote_class",
-            description: "Move all active internal students in one class to another class/session. This is a major register change and requires confirm=true. Existing historical payment records keep their original class/session.",'''
-          tool_marker = '\n'.join(line[10:] if line.startswith('          ') else line for line in tool_marker.splitlines())
-
-          tools = '''  {
-            name: "correct_internal_payment",
-            description: "Correct or reverse one locked internal-student payment by reference number. The original remains in the audit trail. Requires confirm=true after the Principal reviews the proposed change.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                reference_no: { type: "string" },
-                action: { type: "string", enum: ["correct", "reverse"] },
-                corrected_amount: { type: "number", exclusiveMinimum: 0 },
-                reason: { type: "string", minLength: 5 },
-                confirm: { type: "boolean", description: "Must be true after the Principal confirms the correction or reversal." },
-              },
-              required: ["reference_no", "action", "reason", "confirm"],
-            },
-          },
-          {
-            name: "correct_external_payment",
-            description: "Correct or reverse one locked WAEC/NECO external-candidate payment by reference number. The original remains in the audit trail. Requires confirm=true.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                reference_no: { type: "string" },
-                action: { type: "string", enum: ["correct", "reverse"] },
-                corrected_amount: { type: "number", exclusiveMinimum: 0 },
-                reason: { type: "string", minLength: 5 },
-                confirm: { type: "boolean" },
-              },
-              required: ["reference_no", "action", "reason", "confirm"],
-            },
-          },
-          {
-            name: "correct_school_expense",
-            description: "Correct or reverse one locked school expense by reference number. The original remains in the audit trail. Requires confirm=true.",
-            inputSchema: {
-              type: "object",
-              properties: {
-                reference_no: { type: "string" },
-                action: { type: "string", enum: ["correct", "reverse"] },
-                corrected_amount: { type: "number", exclusiveMinimum: 0 },
-                reason: { type: "string", minLength: 5 },
-                confirm: { type: "boolean" },
-              },
-              required: ["reference_no", "action", "reason", "confirm"],
-            },
-          },
-          '''
-          tools = '\n'.join(line[10:] if line.startswith('          ') else line for line in tools.splitlines())
+          tools = "\n".join([
+            '  {',
+            '    name: "correct_internal_payment",',
+            '    description: "Correct or reverse one locked internal-student payment by reference number. The original remains in the audit trail. Requires confirm=true after the Principal reviews the proposed change.",',
+            '    inputSchema: {',
+            '      type: "object",',
+            '      properties: {',
+            '        reference_no: { type: "string" },',
+            '        action: { type: "string", enum: ["correct", "reverse"] },',
+            '        corrected_amount: { type: "number", exclusiveMinimum: 0 },',
+            '        reason: { type: "string", minLength: 5 },',
+            '        confirm: { type: "boolean", description: "Must be true after the Principal confirms the correction or reversal." },',
+            '      },',
+            '      required: ["reference_no", "action", "reason", "confirm"],',
+            '    },',
+            '  },',
+            '  {',
+            '    name: "correct_external_payment",',
+            '    description: "Correct or reverse one locked WAEC/NECO external-candidate payment by reference number. The original remains in the audit trail. Requires confirm=true.",',
+            '    inputSchema: {',
+            '      type: "object",',
+            '      properties: {',
+            '        reference_no: { type: "string" },',
+            '        action: { type: "string", enum: ["correct", "reverse"] },',
+            '        corrected_amount: { type: "number", exclusiveMinimum: 0 },',
+            '        reason: { type: "string", minLength: 5 },',
+            '        confirm: { type: "boolean" },',
+            '      },',
+            '      required: ["reference_no", "action", "reason", "confirm"],',
+            '    },',
+            '  },',
+            '  {',
+            '    name: "correct_school_expense",',
+            '    description: "Correct or reverse one locked school expense by reference number. The original remains in the audit trail. Requires confirm=true.",',
+            '    inputSchema: {',
+            '      type: "object",',
+            '      properties: {',
+            '        reference_no: { type: "string" },',
+            '        action: { type: "string", enum: ["correct", "reverse"] },',
+            '        corrected_amount: { type: "number", exclusiveMinimum: 0 },',
+            '        reason: { type: "string", minLength: 5 },',
+            '        confirm: { type: "boolean" },',
+            '      },',
+            '      required: ["reference_no", "action", "reason", "confirm"],',
+            '    },',
+            '  },',
+            '',
+          ])
 
           if 'name: "correct_internal_payment"' not in text:
-            if tool_marker not in text:
-              raise SystemExit('promote_class tool marker not found')
-            text = text.replace(tool_marker, tools + tool_marker, 1)
+            name_pos = text.find('name: "promote_class"')
+            if name_pos < 0:
+              raise SystemExit('promote_class tool not found')
+            start = text.rfind('  {', 0, name_pos)
+            if start < 0:
+              raise SystemExit('promote_class tool start not found')
+            text = text[:start] + tools + text[start:]
 
-          execute_marker = '  if (name === "promote_class") {'
-          execute = '''  if (["correct_internal_payment", "correct_external_payment", "correct_school_expense"].includes(name)) {
-            if (args.confirm !== true) throw new CommandCenterError("Correction was not executed because confirm=true was not supplied after Principal review.");
-            const reference = String(args.reference_no || "").trim();
-            const action = String(args.action || "").toLowerCase();
-            const reason = String(args.reason || "").trim();
-            if (!reference) throw new CommandCenterError("Payment or expense reference number is required.");
-            if (!["correct", "reverse"].includes(action)) throw new CommandCenterError("Action must be correct or reverse.");
-            if (reason.length < 5) throw new CommandCenterError("Give a clear correction reason of at least 5 characters.");
-            const correctedAmount = action === "correct" ? Number(args.corrected_amount) : null;
-            if (action === "correct" && !(Number(correctedAmount) > 0)) throw new CommandCenterError("A valid corrected amount is required.");
+          execute = "\n".join([
+            '  if (["correct_internal_payment", "correct_external_payment", "correct_school_expense"].includes(name)) {',
+            '    if (args.confirm !== true) throw new CommandCenterError("Correction was not executed because confirm=true was not supplied after Principal review.");',
+            '    const reference = String(args.reference_no || "").trim();',
+            '    const action = String(args.action || "").toLowerCase();',
+            '    const reason = String(args.reason || "").trim();',
+            '    if (!reference) throw new CommandCenterError("Payment or expense reference number is required.");',
+            '    if (!["correct", "reverse"].includes(action)) throw new CommandCenterError("Action must be correct or reverse.");',
+            '    if (reason.length < 5) throw new CommandCenterError("Give a clear correction reason of at least 5 characters.");',
+            '    const correctedAmount = action === "correct" ? Number(args.corrected_amount) : null;',
+            '    if (action === "correct" && !(Number(correctedAmount) > 0)) throw new CommandCenterError("A valid corrected amount is required.");',
+            '',
+            '    const config = name === "correct_internal_payment"',
+            '      ? { view: "effective_payment_ledger", rpc: "principal_correct_payment", amount: "amount_paid", kind: "internal payment" }',
+            '      : name === "correct_external_payment"',
+            '        ? { view: "effective_external_candidate_payment_ledger", rpc: "principal_correct_external_payment", amount: "amount_paid", kind: "external payment" }',
+            '        : { view: "effective_school_expense_ledger", rpc: "principal_correct_expense", amount: "amount", kind: "school expense" };',
+            '',
+            '    const { data: current, error: lookupError } = await client.from(config.view).select("*").eq("reference_no", reference).maybeSingle();',
+            '    if (lookupError) throw new CommandCenterError(lookupError.message);',
+            '    if (!current) throw new CommandCenterError(`Effective ${config.kind} \'${reference}\' was not found. It may already have been corrected or reversed.`);',
+            '',
+            '    const { data, error } = await client.rpc(config.rpc, {',
+            '      p_original_id: current.id,',
+            '      p_action: action,',
+            '      p_amount: correctedAmount,',
+            '      p_reason: reason,',
+            '    });',
+            '    if (error) throw new CommandCenterError(error.message);',
+            '',
+            '    return {',
+            '      ok: true,',
+            '      message: action === "correct"',
+            '        ? `${config.kind} ${reference} corrected from ${Number(current[config.amount])} to ${correctedAmount}. The original remains in the audit trail.`',
+            '        : `${config.kind} ${reference} reversed from effective totals. The original remains in the audit trail.`,',
+            '      reference_no: reference,',
+            '      action,',
+            '      original_amount: Number(current[config.amount]),',
+            '      corrected_amount: correctedAmount,',
+            '      correction: data,',
+            '    };',
+            '  }',
+            '',
+            '',
+          ])
 
-            const config = name === "correct_internal_payment"
-              ? { view: "effective_payment_ledger", rpc: "principal_correct_payment", amount: "amount_paid", kind: "internal payment" }
-              : name === "correct_external_payment"
-                ? { view: "effective_external_candidate_payment_ledger", rpc: "principal_correct_external_payment", amount: "amount_paid", kind: "external payment" }
-                : { view: "effective_school_expense_ledger", rpc: "principal_correct_expense", amount: "amount", kind: "school expense" };
-
-            const { data: current, error: lookupError } = await client
-              .from(config.view)
-              .select("*")
-              .eq("reference_no", reference)
-              .maybeSingle();
-            if (lookupError) throw new CommandCenterError(lookupError.message);
-            if (!current) throw new CommandCenterError(`Effective ${config.kind} '${reference}' was not found. It may already have been corrected or reversed.`);
-
-            const { data, error } = await client.rpc(config.rpc, {
-              p_original_id: current.id,
-              p_action: action,
-              p_amount: correctedAmount,
-              p_reason: reason,
-            });
-            if (error) throw new CommandCenterError(error.message);
-
-            return {
-              ok: true,
-              message: action === "correct"
-                ? `${config.kind} ${reference} corrected from ${Number(current[config.amount])} to ${correctedAmount}. The original remains in the audit trail.`
-                : `${config.kind} ${reference} reversed from effective totals. The original remains in the audit trail.`,
-              reference_no: reference,
-              action,
-              original_amount: Number(current[config.amount]),
-              corrected_amount: correctedAmount,
-              correction: data,
-            };
-          }
-
-          '''
-          execute = '\n'.join(line[10:] if line.startswith('          ') else line for line in execute.splitlines())
           if 'name === "correct_internal_payment"' not in text:
-            if execute_marker not in text:
-              raise SystemExit('promote_class execute marker not found')
-            text = text.replace(execute_marker, execute + execute_marker, 1)
+            marker = '  if (name === "promote_class") {'
+            if marker not in text:
+              raise SystemExit('promote_class execution block not found')
+            text = text.replace(marker, execute + marker, 1)
 
           path.write_text(text)
           PY
