@@ -19,18 +19,43 @@ export async function GET() {
     return { ready: !error, error: error?.code || null };
   }
 
-  const [settings, expenses, internalCandidates, externalCandidates, externalPayments, categoryBasis, candidateScope, guardianPhone] = await Promise.all([
+  const [
+    settings,
+    expenses,
+    internalCandidates,
+    externalCandidates,
+    externalPayments,
+    enrollmentHistory,
+    categoryBasis,
+    candidateScope,
+    guardianPhone,
+  ] = await Promise.all([
     table("portal_settings"),
     table("school_expenses"),
     table("category_candidates"),
     table("external_candidates"),
     table("external_candidate_payments"),
+    table("student_enrollment_history"),
     column("financial_categories", "basis"),
     column("financial_categories", "candidate_scope"),
     column("students", "guardian_phone"),
   ]);
 
-  const checks = { settings, expenses, internalCandidates, externalCandidates, externalPayments, categoryBasis, candidateScope, guardianPhone };
+  const checks = {
+    settings,
+    expenses,
+    internalCandidates,
+    externalCandidates,
+    externalPayments,
+    enrollmentHistory,
+    categoryBasis,
+    candidateScope,
+    guardianPhone,
+  };
   const ready = Object.values(checks).every((x) => x.ready);
-  return NextResponse.json({ ok: true, ready, checks }, { headers: { "cache-control": "no-store" } });
+
+  return NextResponse.json(
+    { ok: true, ready, checks },
+    { headers: { "cache-control": "no-store" } },
+  );
 }
