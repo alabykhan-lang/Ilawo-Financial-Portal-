@@ -200,6 +200,7 @@ function catSummary(d: Data, c: R, sessionId: string, termId: string, from?: str
   let fully = 0;
   let part = 0;
   let unpaid = 0;
+  const statusRows: R[] = [];
   internal.forEach((s) => {
     const override = selectedCandidates.find((x) => x.student_id === s.id)?.expected_amount_override;
     const charge = d.charges.find(
@@ -214,8 +215,10 @@ function catSummary(d: Data, c: R, sessionId: string, termId: string, from?: str
     if (due <= 0) return;
     expected += due;
     const got = paid.get(s.id) || 0;
-    if (got >= due) fully++;
-    else if (got > 0) part++;
+    const status = got >= due ? "full" : got > 0 ? "part" : "unpaid";
+    statusRows.push({ id: `internal-${s.id}`, name: s.full_name, admission_no: s.admission_no, type: "Internal", paid: got, due, status });
+    if (status === "full") fully++;
+    else if (status === "part") part++;
     else unpaid++;
   });
 
@@ -230,8 +233,10 @@ function catSummary(d: Data, c: R, sessionId: string, termId: string, from?: str
     if (due <= 0) return;
     extExpected += due;
     const got = extPaid.get(s.id) || 0;
-    if (got >= due) extFully++;
-    else if (got > 0) extPart++;
+    const status = got >= due ? "full" : got > 0 ? "part" : "unpaid";
+    statusRows.push({ id: `external-${s.id}`, name: s.full_name, admission_no: s.class_level || "External", type: "External", paid: got, due, status });
+    if (status === "full") extFully++;
+    else if (status === "part") extPart++;
     else extUnpaid++;
   });
 
@@ -256,6 +261,7 @@ function catSummary(d: Data, c: R, sessionId: string, termId: string, from?: str
     unpaid: unpaid + extUnpaid,
     internalCount: internal.length,
     externalCount: ext.length,
+    statusRows: statusRows.sort((a, b) => String(a.name).localeCompare(String(b.name))),
   };
 }
 
@@ -347,6 +353,19 @@ function Home({ d, go }: { d: Data; go: (t: Tab) => void }) {
             )}
           </div>
           {mixed && <p className="helper-line">Only WAEC and NECO support both internal and external candidates. Their money is combined, while candidate counts remain separate.</p>}
+          {s.statusRows.length > 0 && (
+            <details style={{ marginTop: 18 }}>
+              <summary className="text-button" style={{ cursor: "pointer" }}>View names and payment status ({s.statusRows.length})</summary>
+              <div className="simple-list" style={{ marginTop: 12 }}>
+                {s.statusRows.map((row: R) => (
+                  <div className="simple-list-row" key={row.id}>
+                    <div><strong>{row.name}</strong><span>{row.type}{row.admission_no ? ` · ${row.admission_no}` : ""} · Paid {naira(row.paid)} of {naira(row.due)}</span></div>
+                    <Badge tone={row.status === "full" ? "success" : row.status === "part" ? "warning" : "danger"}>{row.status === "full" ? "Fully paid" : row.status === "part" ? "Partly paid" : "Not paid"}</Badge>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
           <div className="quick-actions" style={{ marginTop: 18 }}>
             <button className="button primary" onClick={() => go("record")}>Record money</button>
             <button className="button ghost" onClick={() => go("reports")}>View report</button>
@@ -791,6 +810,12 @@ function Reports({ d }: { d: Data }) {
       <section className="panel">
         <div className="table-scroll"><table><thead><tr><th>Category</th><th>Candidates / Students</th><th>Payment status</th><th>Collected</th><th>Expenses</th><th>Net balance</th></tr></thead><tbody>{rows.map(({ c, s }) => <tr key={c.id}><td><strong>{categoryName(c)}</strong></td><td>{isMixed(c) ? `${s.internalCount} internal · ${s.externalCount} external` : `${s.internalCount} internal`}</td><td>{s.fully} full · {s.part} part · {s.unpaid} unpaid</td><td>{naira(s.collected)}</td><td>{naira(s.spent)}</td><td><strong>{naira(s.collected - s.spent)}</strong></td></tr>)}</tbody></table></div>
       </section>
+      {cat && rows[0]?.s.statusRows.length > 0 && (
+        <section className="panel">
+          <div className="panel-heading"><div><span className="section-kicker">PAYMENT STATUS NAMES</span><h2>{categoryName(rows[0].c)}</h2></div></div>
+          <div className="simple-list">{rows[0].s.statusRows.map((row: R) => <div className="simple-list-row" key={row.id}><div><strong>{row.name}</strong><span>{row.type}{row.admission_no ? ` · ${row.admission_no}` : ""} · {naira(row.paid)} / {naira(row.due)}</span></div><Badge tone={row.status === "full" ? "success" : row.status === "part" ? "warning" : "danger"}>{row.status === "full" ? "Fully paid" : row.status === "part" ? "Partly paid" : "Not paid"}</Badge></div>)}</div>
+        </section>
+      )}
     </div>
   );
 }
@@ -909,6 +934,12 @@ function Settings({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () 
       <section className="panel">
         <div className="panel-heading"><h2>Configured categories</h2></div>
         <div className="simple-list">{d.categories.filter((x) => x.active).map((x) => <div className="simple-list-row" key={x.id}><div><strong>{categoryName(x)}</strong><span>{basis(x) === "term" ? "Term-based" : basis(x) === "session" ? "Session-based" : "One-off / special"} · {isMixed(x) ? "Internal + external" : "Internal only"}</span></div><Badge tone="success">Active</Badge></div>)}</div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading"><div><span className="section-kicker">PERSONAL BUSINESS</span><h2>Private small-trade record</h2></div><Badge tone="neutral">Separate</Badge></div>
+        <p className="helper-line">Products, stock, sales and private business expenses stay completely separate from school collections.</p>
+        <a className="button ghost" href="/personal-business">Open Personal Business →</a>
       </section>
 
       <section className="panel">
