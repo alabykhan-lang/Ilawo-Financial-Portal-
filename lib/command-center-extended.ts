@@ -58,6 +58,51 @@ export const EXTENDED_COMMAND_TOOLS = [
     },
   },
   {
+    name: "correct_internal_payment",
+    description: "Correct or reverse one locked internal-student payment by reference number. The original remains in the audit trail. Requires confirm=true after the Principal reviews the proposed change.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        reference_no: { type: "string" },
+        action: { type: "string", enum: ["correct", "reverse"] },
+        corrected_amount: { type: "number", exclusiveMinimum: 0 },
+        reason: { type: "string", minLength: 5 },
+        confirm: { type: "boolean", description: "Must be true after the Principal confirms the correction or reversal." },
+      },
+      required: ["reference_no", "action", "reason", "confirm"],
+    },
+  },
+  {
+    name: "correct_external_payment",
+    description: "Correct or reverse one locked WAEC/NECO external-candidate payment by reference number. The original remains in the audit trail. Requires confirm=true.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        reference_no: { type: "string" },
+        action: { type: "string", enum: ["correct", "reverse"] },
+        corrected_amount: { type: "number", exclusiveMinimum: 0 },
+        reason: { type: "string", minLength: 5 },
+        confirm: { type: "boolean" },
+      },
+      required: ["reference_no", "action", "reason", "confirm"],
+    },
+  },
+  {
+    name: "correct_school_expense",
+    description: "Correct or reverse one locked school expense by reference number. The original remains in the audit trail. Requires confirm=true.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        reference_no: { type: "string" },
+        action: { type: "string", enum: ["correct", "reverse"] },
+        corrected_amount: { type: "number", exclusiveMinimum: 0 },
+        reason: { type: "string", minLength: 5 },
+        confirm: { type: "boolean" },
+      },
+      required: ["reference_no", "action", "reason", "confirm"],
+    },
+  },
+  {
     name: "promote_class",
     description: "Move all active internal students in one class to another class/session. This is a major register change and requires confirm=true. Existing historical payment records keep their original class/session.",
     inputSchema: {
@@ -173,6 +218,48 @@ export async function executeExtendedCommandTool(client: AnyClient, name: string
     const { data, error: writeError } = await client.from("external_candidate_payments").insert(rows).select("id,reference_no,external_candidate_id,amount_paid,payment_date");
     if (writeError) throw new CommandCenterError(writeError.message);
     return { ok: true, message: `${data?.length || rows.length} external payments recorded and protected.`, category: c.name, count: data?.length || rows.length, total: rows.reduce((a: number, r: R) => a + r.amount_paid, 0) };
+  }
+
+  if (["correct_internal_payment", "correct_external_payment", "correct_school_expense"].includes(name)) {
+    if (args.confirm !== true) throw new CommandCenterError("Correction was not executed because confirm=true was not supplied after Principal review.");
+    const reference = String(args.reference_no || "").trim();
+    const action = String(args.action || "").toLowerCase();
+    const reason = String(args.reason || "").trim();
+    if (!reference) throw new CommandCenterError("Payment or expense reference number is required.");
+    if (!["correct", "reverse"].includes(action)) throw new CommandCenterError("Action must be correct or reverse.");
+    if (reason.length < 5) throw new CommandCenterError("Give a clear correction reason of at least 5 characters.");
+    const correctedAmount = action === "correct" ? Number(args.corrected_amount) : null;
+    if (action === "correct" && !(Number(correctedAmount) > 0)) throw new CommandCenterError("A valid corrected amount is required.");
+
+    const config = name === "correct_internal_payment"
+      ? { view: "effective_payment_ledger", rpc: "principal_correct_payment", amount: "amount_paid", kind: "internal payment" }
+      : name === "correct_external_payment"
+        ? { view: "effective_external_candidate_payment_ledger", rpc: "principal_correct_external_payment", amount: "amount_paid", kind: "external payment" }
+        : { view: "effective_school_expense_ledger", rpc: "principal_correct_expense", amount: "amount", kind: "school expense" };
+
+    const { data: current, error: lookupError } = await client.from(config.view).select("*").eq("reference_no", reference).maybeSingle();
+    if (lookupError) throw new CommandCenterError(lookupError.message);
+    if (!current) throw new CommandCenterError(`Effective ${config.kind} '${reference}' was not found. It may already have been corrected or reversed.`);
+
+    const { data, error } = await client.rpc(config.rpc, {
+      p_original_id: current.id,
+      p_action: action,
+      p_amount: correctedAmount,
+      p_reason: reason,
+    });
+    if (error) throw new CommandCenterError(error.message);
+
+    return {
+      ok: true,
+      message: action === "correct"
+        ? `${config.kind} ${reference} corrected from ${Number(current[config.amount])} to ${correctedAmount}. The original remains in the audit trail.`
+        : `${config.kind} ${reference} reversed from effective totals. The original remains in the audit trail.`,
+      reference_no: reference,
+      action,
+      original_amount: Number(current[config.amount]),
+      corrected_amount: correctedAmount,
+      correction: data,
+    };
   }
 
   if (name === "promote_class") {
