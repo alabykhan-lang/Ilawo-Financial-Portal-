@@ -11,10 +11,6 @@ on:
         options:
           - dry-run
           - apply
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/live-ilawo-migrate.yml'
 
 permissions:
   contents: read
@@ -28,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      RUN_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'apply' }}
+      RUN_MODE: ${{ inputs.mode }}
       PGPASSWORD: ${{ secrets.ILAWO_DB_PASSWORD }}
       PGDATABASE: postgres
       PGSSLMODE: require
@@ -67,7 +63,7 @@ jobs:
               return 0
             fi
             echo "${label} did not authenticate/connect."
-            sed -E 's/(password=)[^ ]+/\1***/g' /tmp/ilawo-connection.err || true
+            cat /tmp/ilawo-connection.err || true
             return 1
           }
 
@@ -80,7 +76,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          psql -v ON_ERROR_STOP=1 -Atqc "select to_regclass('public.student_payments') is not null, to_regclass('public.financial_categories') is not null;"
           baseline="$(psql -v ON_ERROR_STOP=1 -Atqc "select (to_regclass('public.student_payments') is not null and to_regclass('public.financial_categories') is not null);")"
           if [ "$baseline" != "t" ]; then
             echo "Connected database does not contain the Ilawo baseline schema; refusing to migrate."
