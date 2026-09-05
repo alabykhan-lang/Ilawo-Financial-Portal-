@@ -1,0 +1,47 @@
+name: Complete Principal portal details
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/portal-finish.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  finish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Apply completion patch
+        run: python scripts/portal_finish.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
+
+      - name: Commit verified completion
+        run: |
+          rm .github/workflows/portal-finish.yml scripts/portal_finish.py
+          git config user.name "Ilawo Portal Repair"
+          git config user.email "actions@users.noreply.github.com"
+          git add components/PrincipalPortalV4.tsx .github/workflows/portal-finish.yml scripts/portal_finish.py
+          git commit -m "[skip ci] Complete Principal reports and Personal Business access"
+          git push origin HEAD:main
