@@ -31,7 +31,10 @@ declare
   v_type text;
   v_actor uuid;
 begin
-  v_actor := coalesce(auth.uid(), new.created_by);
+  -- The current students table has no created_by column. Authenticated portal
+  -- writes still expose the Principal through auth.uid(); administrative or
+  -- migration-time writes may legitimately leave changed_by null.
+  v_actor := auth.uid();
 
   if tg_op = 'INSERT' then
     insert into public.student_enrollment_history(
@@ -112,10 +115,12 @@ revoke all on function private.capture_student_enrollment_history() from public,
 revoke all on function private.prevent_enrollment_history_mutation() from public, anon, authenticated;
 
 -- Backfill one baseline row for existing students that have no captured history.
+-- changed_by is intentionally null because the legacy student rows do not
+-- carry a creator column and a migration must not invent an actor.
 insert into public.student_enrollment_history(
   student_id, to_class_id, to_session_id, change_type, changed_by, note
 )
-select s.id, s.class_id, s.academic_session_id, 'created', s.created_by, 'Baseline captured when enrollment history was enabled.'
+select s.id, s.class_id, s.academic_session_id, 'created', null, 'Baseline captured when enrollment history was enabled.'
 from public.students s
 where not exists (
   select 1 from public.student_enrollment_history h where h.student_id = s.id
