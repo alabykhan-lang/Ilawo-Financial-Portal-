@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { authenticatePrincipal, COMMAND_TOOLS, CommandCenterError, executeCommandTool } from "@/lib/command-center";
+import { EXTENDED_COMMAND_TOOLS, executeExtendedCommandTool } from "@/lib/command-center-extended";
 
 export const runtime = "nodejs";
+
+const allTools = [...COMMAND_TOOLS, ...EXTENDED_COMMAND_TOOLS];
+const extendedNames = new Set(EXTENDED_COMMAND_TOOLS.map((tool) => tool.name as string));
 
 function errorResponse(error: unknown) {
   if (error instanceof CommandCenterError) {
@@ -18,7 +22,7 @@ export async function GET(request: Request) {
       ok: true,
       name: "Ilawo Principal Command Center",
       principal: profile.full_name,
-      tools: COMMAND_TOOLS,
+      tools: allTools,
     });
   } catch (error) {
     return errorResponse(error);
@@ -32,7 +36,9 @@ export async function POST(request: Request) {
     const tool = String(body.tool || body.name || "").trim();
     const args = body.arguments && typeof body.arguments === "object" ? body.arguments : body.args && typeof body.args === "object" ? body.args : {};
     if (!tool) throw new CommandCenterError("A command-center tool name is required.");
-    const result = await executeCommandTool(client, profile, tool, args);
+    const result = extendedNames.has(tool)
+      ? await executeExtendedCommandTool(client, tool, args)
+      : await executeCommandTool(client, profile, tool, args);
     return NextResponse.json({ ok: true, result });
   } catch (error) {
     return errorResponse(error);
