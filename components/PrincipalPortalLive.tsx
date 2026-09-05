@@ -4,33 +4,16 @@ import { useEffect, useRef, useState } from "react";
 import PrincipalPortalV4 from "@/components/PrincipalPortalV4";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 
-const LIVE_TABLES = [
-  "portal_settings",
-  "students",
-  "academic_sessions",
-  "terms",
-  "classes",
-  "financial_categories",
-  "financial_category_classes",
-  "expected_charges",
-  "student_payments",
-  "payment_correction_requests",
-  "payment_corrections",
-  "category_candidates",
-  "external_candidates",
-  "external_candidate_payments",
-  "school_expenses",
-  "personal_products",
-  "personal_sales",
-  "personal_expenses",
-] as const;
-
 /**
  * Keeps the Principal portal aligned with writes made outside the open page
  * (for example from the Principal's connected ChatGPT/Supabase session).
  *
- * Realtime events remount the record-book client so its complete financial
- * snapshot is re-read through the Principal's existing authenticated session.
+ * One schema-level Realtime subscription is deliberately used instead of a
+ * separate filter for every table. That makes the client tolerant while a
+ * new migration is being rolled out: tables that are not yet present cannot
+ * break the subscription, and newly published financial tables begin working
+ * without another frontend release.
+ *
  * A focus/visibility fallback covers browsers that temporarily suspend
  * realtime connections while the phone is in the background.
  */
@@ -51,15 +34,14 @@ export default function PrincipalPortalLive() {
       }, 650);
     };
 
-    let channel = client.channel("ilawo-principal-live-record-book");
-    for (const table of LIVE_TABLES) {
-      channel = channel.on(
+    const channel = client
+      .channel("ilawo-principal-live-record-book")
+      .on(
         "postgres_changes",
-        { event: "*", schema: "public", table },
+        { event: "*", schema: "public" },
         requestRefresh,
-      );
-    }
-    channel.subscribe();
+      )
+      .subscribe();
 
     const refreshAfterBackground = () => {
       if (document.visibilityState !== "visible") return;
