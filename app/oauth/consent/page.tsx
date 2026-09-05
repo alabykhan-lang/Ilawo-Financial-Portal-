@@ -1,13 +1,12 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 
 export default function OAuthConsentPage() {
-  const params = useSearchParams();
-  const authorizationId = params.get("authorization_id") || "";
   const client = getSupabaseBrowserClient() as any;
+  const [authorizationId, setAuthorizationId] = useState("");
+  const [ready, setReady] = useState(false);
   const [details, setDetails] = useState<any>(null);
   const [user, setUser] = useState<any>(null);
   const [email, setEmail] = useState("");
@@ -15,21 +14,30 @@ export default function OAuthConsentPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function load() {
-    if (!client || !authorizationId) return;
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("authorization_id") || "";
+    setAuthorizationId(id);
+    setReady(true);
+  }, []);
+
+  async function load(id = authorizationId) {
+    if (!client || !id) return;
     const session = await client.auth.getSession();
     setUser(session.data.session?.user || null);
-    const result = await client.auth.oauth.getAuthorizationDetails(authorizationId);
+    const result = await client.auth.oauth.getAuthorizationDetails(id);
     if (result.error) setError(result.error.message || "Authorization request could not be loaded.");
     else setDetails(result.data);
   }
 
-  useEffect(() => { void load(); }, [authorizationId]);
+  useEffect(() => {
+    if (authorizationId) void load(authorizationId);
+  }, [authorizationId]);
 
   async function signIn(e: FormEvent) {
     e.preventDefault();
     if (!client) return;
-    setBusy(true); setError("");
+    setBusy(true);
+    setError("");
     const result = await client.auth.signInWithPassword({ email: email.trim(), password });
     setBusy(false);
     if (result.error) return setError(result.error.message);
@@ -38,7 +46,8 @@ export default function OAuthConsentPage() {
 
   async function decide(approve: boolean) {
     if (!client || !authorizationId) return;
-    setBusy(true); setError("");
+    setBusy(true);
+    setError("");
     const result = approve
       ? await client.auth.oauth.approveAuthorization(authorizationId)
       : await client.auth.oauth.denyAuthorization(authorizationId);
@@ -55,7 +64,7 @@ export default function OAuthConsentPage() {
           <h1>Connect ChatGPT</h1>
           <p>Allow the Principal's ChatGPT command center to read school finance data and perform approved actions using the same protected account permissions.</p>
         </div>
-        {!authorizationId && <div className="setup-alert"><strong>Missing authorization request</strong><p>Start the connection from ChatGPT, then return here.</p></div>}
+        {ready && !authorizationId && <div className="setup-alert"><strong>Missing authorization request</strong><p>Start the connection from ChatGPT, then return here.</p></div>}
         {error && <p className="form-error">{error}</p>}
         {authorizationId && !user && (
           <form className="stack-form" onSubmit={signIn}>
