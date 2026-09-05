@@ -70,6 +70,13 @@ async function opt(c: AnyClient, table: string) {
   return data || [];
 }
 
+async function optFallback(c: AnyClient, primary: string, fallback: string) {
+  const { data, error } = await c.from(primary).select("*");
+  if (!error) return data || [];
+  console.warn(`${primary}: ${error.message}; using ${fallback}`);
+  return opt(c, fallback);
+}
+
 function basis(c: R) {
   return (c.basis || (c.applicable_to_term ? "term" : "session")) as "term" | "session" | "one_off";
 }
@@ -425,7 +432,7 @@ function Home({ d, go }: { d: Data; go: (t: Tab) => void }) {
 
 function Record({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () => Promise<void>; notify: (x: NonNullable<Toast>) => void }) {
   const { session, term } = current(d);
-  const [mode, setMode] = useState<"payment" | "mass" | "external" | "expense" | "photo">("payment");
+  const [mode, setMode] = useState<"payment" | "mass" | "external" | "expense" | "correction" | "photo">("payment");
   const [cat, setCat] = useState("");
   const [cls, setCls] = useState("");
   const [student, setStudent] = useState("");
@@ -443,6 +450,11 @@ function Record({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =>
   const [extExpected, setExtExpected] = useState("");
   const [extCandidate, setExtCandidate] = useState("");
   const [busy, setBusy] = useState(false);
+  const [correctionKind, setCorrectionKind] = useState<"internal" | "external" | "expense">("internal");
+  const [correctionId, setCorrectionId] = useState("");
+  const [correctionAction, setCorrectionAction] = useState<"correct" | "reverse">("correct");
+  const [correctionAmount, setCorrectionAmount] = useState("");
+  const [correctionReason, setCorrectionReason] = useState("");
 
   const category = d.categories.find((x) => x.id === cat);
   const b = category ? basis(category) : "session";
@@ -456,6 +468,30 @@ function Record({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =>
   }
   const external = mixed ? d.external.filter((x) => x.active && x.category_id === cat && x.session_id === session?.id) : [];
   const ctx = { session_id: session?.id, term_id: b === "term" ? term?.id : null };
+
+  const correctionRows = (
+    correctionKind === "internal"
+      ? d.payments.filter((x) => x.session_id === session?.id)
+      : correctionKind === "external"
+        ? d.externalPayments.filter((x) => x.session_id === session?.id)
+        : d.expenses.filter((x) => x.session_id === session?.id)
+  )
+    .filter((x) => !cat || x.category_id === cat)
+    .sort((a, b) => String(b.payment_date || b.expense_date || "").localeCompare(String(a.payment_date || a.expense_date || "")))
+    .slice(0, 250);
+
+  function correctionLabel(row: R) {
+    const category = categoryName(d.categories.find((x) => x.id === row.category_id) || { name: "Category" });
+    if (correctionKind === "internal") {
+      const who = d.students.find((x) => x.id === row.student_id)?.full_name || "Student";
+      return `${who} · ${category} · ${naira(row.amount_paid)} · ${shortDate(row.payment_date)}`;
+    }
+    if (correctionKind === "external") {
+      const who = d.external.find((x) => x.id === row.external_candidate_id)?.full_name || "External candidate";
+      return `${who} · ${category} · ${naira(row.amount_paid)} · ${shortDate(row.payment_date)}`;
+    }
+    return `${row.expense_type || "Expense"} · ${category} · ${naira(row.amount)} · ${shortDate(row.expense_date)}`;
+  }
 
   async function pay(e: FormEvent) {
     e.preventDefault();
@@ -528,6 +564,35 @@ function Record({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =>
     await reload();
   }
 
+  async function correctRecord(e: FormEvent) {
+    e.preventDefault();
+    if (!correctionId) return notify({ type: "info", message: "Choose the record you want to correct." });
+    if (correctionReason.trim().length < 5) return notify({ type: "info", message: "Enter a clear correction reason." });
+    if (correctionAction === "correct" && numberValue(correctionAmount) <= 0) return notify({ type: "info", message: "Enter the corrected amount." });
+
+    const fn = correctionKind === "internal"
+      ? "principal_correct_payment"
+      : correctionKind === "external"
+        ? "principal_correct_external_payment"
+        : "principal_correct_expense";
+
+    setBusy(true);
+    const { error } = await c.rpc(fn, {
+      p_original_id: correctionId,
+      p_action: correctionAction,
+      p_amount: correctionAction === "correct" ? numberValue(correctionAmount) : null,
+      p_reason: correctionReason.trim(),
+    });
+    setBusy(false);
+    if (error) return notify({ type: "error", message: error.message });
+
+    notify({ type: "success", message: correctionAction === "correct" ? "Correction applied. The original remains in the audit trail." : "Record reversed from effective totals. The original remains in the audit trail." });
+    setCorrectionId("");
+    setCorrectionAmount("");
+    setCorrectionReason("");
+    await reload();
+  }
+
   return (
     <div className="content-wrap">
       <Header title="Record" description="Choose what you want to record. Session and term are filled automatically." />
@@ -536,6 +601,7 @@ function Record({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =>
         <button className={mode === "mass" ? "active" : ""} onClick={() => setMode("mass")}>Mass record</button>
         <button className={mode === "external" ? "active" : ""} onClick={() => setMode("external")}>WAEC/NECO external</button>
         <button className={mode === "expense" ? "active" : ""} onClick={() => setMode("expense")}>Expense</button>
+        <button className={mode === "correction" ? "active" : ""} onClick={() => { setMode("correction"); setCat(""); setCorrectionId(""); }}>Correct record</button>
         <button className={mode === "photo" ? "active" : ""} onClick={() => setMode("photo")}>Photo sheet</button>
       </div>
 
@@ -632,6 +698,36 @@ function Record({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =>
           </form>
         </section>
       )}
+
+      {mode === "correction" && (
+  <section className="panel form-panel">
+    <div className="panel-heading"><div><span className="section-kicker">AUDITED CORRECTION</span><h2>Correct a locked financial record</h2></div><Badge tone="warning">Original preserved</Badge></div>
+    <div className="setup-alert"><strong>Saved financial records are never edited or deleted.</strong><p>A correction creates a replacement amount, while a reversal removes the selected entry from effective totals. The original entry and reason stay in the audit history.</p></div>
+    <form className="stack-form" onSubmit={correctRecord}>
+      <div className="form-grid">
+        <Select label="Record type" value={correctionKind} onChange={(v) => { setCorrectionKind(v as "internal" | "external" | "expense"); setCorrectionId(""); setCorrectionAmount(""); }}>
+          <option value="internal">Internal student payment</option>
+          <option value="external">WAEC / NECO external payment</option>
+          <option value="expense">School expense</option>
+        </Select>
+        <Select label="Category filter" value={cat} onChange={(v) => { setCat(v); setCorrectionId(""); }}>
+          <option value="">All categories</option>{d.categories.filter((x) => x.active).map((x) => <option key={x.id} value={x.id}>{categoryName(x)}</option>)}
+        </Select>
+      </div>
+      <Select label="Record to correct" value={correctionId} onChange={(v) => { setCorrectionId(v); setCorrectionAmount(""); }} required>
+        <option value="">Choose a current effective record</option>{correctionRows.map((x) => <option key={x.id} value={x.id}>{correctionLabel(x)}</option>)}
+      </Select>
+      {!correctionRows.length && <p className="muted">No effective records match this type and category in the current session.</p>}
+      <Select label="What should happen?" value={correctionAction} onChange={(v) => { setCorrectionAction(v as "correct" | "reverse"); setCorrectionAmount(""); }}>
+        <option value="correct">Correct the amount</option>
+        <option value="reverse">Reverse this record</option>
+      </Select>
+      {correctionAction === "correct" && <Input label="Correct amount (₦)" type="number" value={correctionAmount} onChange={setCorrectionAmount} required />}
+      <Input label="Reason for correction" value={correctionReason} onChange={setCorrectionReason} required placeholder="e.g. Amount was entered incorrectly" />
+      <button className="button primary full" disabled={busy || !correctionId || correctionReason.trim().length < 5 || (correctionAction === "correct" && numberValue(correctionAmount) <= 0)}>{busy ? "Applying…" : correctionAction === "correct" ? "Apply correction" : "Reverse record"}</button>
+    </form>
+  </section>
+)}
 
       {mode === "photo" && (
         <section className="panel form-panel">
@@ -957,7 +1053,7 @@ async function load(c: AnyClient, u: User): Promise<Data> {
   if (profile.role !== "principal") throw new Error("This portal is reserved for the Principal account.");
 
   const [classes, sessions, terms, categories, categoryClasses, students, charges, payments, expenses, candidates, external, externalPayments, settings] = await Promise.all([
-    opt(c, "classes"), opt(c, "academic_sessions"), opt(c, "terms"), opt(c, "financial_categories"), opt(c, "financial_category_classes"), opt(c, "students"), opt(c, "expected_charges"), opt(c, "effective_payment_ledger"), opt(c, "school_expenses"), opt(c, "category_candidates"), opt(c, "external_candidates"), opt(c, "external_candidate_payments"), opt(c, "portal_settings"),
+    opt(c, "classes"), opt(c, "academic_sessions"), opt(c, "terms"), opt(c, "financial_categories"), opt(c, "financial_category_classes"), opt(c, "students"), opt(c, "expected_charges"), opt(c, "effective_payment_ledger"), optFallback(c, "effective_school_expense_ledger", "school_expenses"), opt(c, "category_candidates"), opt(c, "external_candidates"), optFallback(c, "effective_external_candidate_payment_ledger", "external_candidate_payments"), opt(c, "portal_settings"),
   ]);
   const real = sessions.filter((s: R) => !s.is_test);
   const ids = new Set(real.map((s: R) => s.id));
