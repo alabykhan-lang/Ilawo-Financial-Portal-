@@ -1,0 +1,217 @@
+name: One-time Principal correction UI repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/correction-ui-repair.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Add correction workflow to Principal record book
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('components/PrincipalPortalV4.tsx')
+          text = path.read_text()
+
+          opt_marker = '''async function opt(c: AnyClient, table: string) {
+            const { data, error } = await c.from(table).select("*");
+            if (error) {
+              console.warn(`${table}: ${error.message}`);
+              return [];
+            }
+            return data || [];
+          }
+          '''
+          opt_marker = '\n'.join(line[10:] if line.startswith('          ') else line for line in opt_marker.splitlines()) + '\n'
+          fallback = '''
+          async function optFallback(c: AnyClient, primary: string, fallback: string) {
+            const { data, error } = await c.from(primary).select("*");
+            if (!error) return data || [];
+            console.warn(`${primary}: ${error.message}; using ${fallback}`);
+            return opt(c, fallback);
+          }
+          '''
+          fallback = '\n'.join(line[10:] if line.startswith('          ') else line for line in fallback.splitlines())
+          if 'async function optFallback' not in text:
+            if opt_marker not in text:
+              raise SystemExit('opt helper marker not found')
+            text = text.replace(opt_marker, opt_marker + fallback + '\n', 1)
+
+          old_mode = 'useState<"payment" | "mass" | "external" | "expense" | "photo">("payment")'
+          new_mode = 'useState<"payment" | "mass" | "external" | "expense" | "correction" | "photo">("payment")'
+          if old_mode in text:
+            text = text.replace(old_mode, new_mode, 1)
+          elif new_mode not in text:
+            raise SystemExit('record mode state marker not found')
+
+          busy_marker = '  const [busy, setBusy] = useState(false);\n\n  const category = d.categories.find((x) => x.id === cat);'
+          correction_state = '''  const [busy, setBusy] = useState(false);
+            const [correctionKind, setCorrectionKind] = useState<"internal" | "external" | "expense">("internal");
+            const [correctionId, setCorrectionId] = useState("");
+            const [correctionAction, setCorrectionAction] = useState<"correct" | "reverse">("correct");
+            const [correctionAmount, setCorrectionAmount] = useState("");
+            const [correctionReason, setCorrectionReason] = useState("");
+
+            const category = d.categories.find((x) => x.id === cat);'''
+          correction_state = '\n'.join(line[10:] if line.startswith('          ') else line for line in correction_state.splitlines())
+          if 'const [correctionKind' not in text:
+            if busy_marker not in text:
+              raise SystemExit('busy/category state marker not found')
+            text = text.replace(busy_marker, correction_state, 1)
+
+          ctx_marker = '  const ctx = { session_id: session?.id, term_id: b === "term" ? term?.id : null };\n'
+          correction_helpers = '''
+            const correctionRows = (
+              correctionKind === "internal"
+                ? d.payments.filter((x) => x.session_id === session?.id)
+                : correctionKind === "external"
+                  ? d.externalPayments.filter((x) => x.session_id === session?.id)
+                  : d.expenses.filter((x) => x.session_id === session?.id)
+            )
+              .filter((x) => !cat || x.category_id === cat)
+              .sort((a, b) => String(b.payment_date || b.expense_date || "").localeCompare(String(a.payment_date || a.expense_date || "")))
+              .slice(0, 250);
+
+            function correctionLabel(row: R) {
+              const category = categoryName(d.categories.find((x) => x.id === row.category_id) || { name: "Category" });
+              if (correctionKind === "internal") {
+                const who = d.students.find((x) => x.id === row.student_id)?.full_name || "Student";
+                return `${who} · ${category} · ${naira(row.amount_paid)} · ${shortDate(row.payment_date)}`;
+              }
+              if (correctionKind === "external") {
+                const who = d.external.find((x) => x.id === row.external_candidate_id)?.full_name || "External candidate";
+                return `${who} · ${category} · ${naira(row.amount_paid)} · ${shortDate(row.payment_date)}`;
+              }
+              return `${row.expense_type || "Expense"} · ${category} · ${naira(row.amount)} · ${shortDate(row.expense_date)}`;
+            }
+          '''
+          correction_helpers = '\n'.join(line[10:] if line.startswith('          ') else line for line in correction_helpers.splitlines())
+          if 'const correctionRows = (' not in text:
+            if ctx_marker not in text:
+              raise SystemExit('record context marker not found')
+            text = text.replace(ctx_marker, ctx_marker + correction_helpers + '\n', 1)
+
+          function_marker = '\n\n  return (\n    <div className="content-wrap">\n      <Header title="Record"'
+          function_code = '''
+            async function correctRecord(e: FormEvent) {
+              e.preventDefault();
+              if (!correctionId) return notify({ type: "info", message: "Choose the record you want to correct." });
+              if (correctionReason.trim().length < 5) return notify({ type: "info", message: "Enter a clear correction reason." });
+              if (correctionAction === "correct" && numberValue(correctionAmount) <= 0) return notify({ type: "info", message: "Enter the corrected amount." });
+
+              const fn = correctionKind === "internal"
+                ? "principal_correct_payment"
+                : correctionKind === "external"
+                  ? "principal_correct_external_payment"
+                  : "principal_correct_expense";
+
+              setBusy(true);
+              const { error } = await c.rpc(fn, {
+                p_original_id: correctionId,
+                p_action: correctionAction,
+                p_amount: correctionAction === "correct" ? numberValue(correctionAmount) : null,
+                p_reason: correctionReason.trim(),
+              });
+              setBusy(false);
+              if (error) return notify({ type: "error", message: error.message });
+
+              notify({ type: "success", message: correctionAction === "correct" ? "Correction applied. The original remains in the audit trail." : "Record reversed from effective totals. The original remains in the audit trail." });
+              setCorrectionId("");
+              setCorrectionAmount("");
+              setCorrectionReason("");
+              await reload();
+            }
+          '''
+          function_code = '\n'.join(line[10:] if line.startswith('          ') else line for line in function_code.splitlines())
+          if 'async function correctRecord' not in text:
+            pos = text.find(function_marker, text.find('function Record('))
+            if pos < 0:
+              raise SystemExit('Record return marker not found')
+            text = text[:pos] + '\n' + function_code + text[pos:]
+
+          photo_tab = '        <button className={mode === "photo" ? "active" : ""} onClick={() => setMode("photo")}>Photo sheet</button>'
+          correction_tab = '        <button className={mode === "correction" ? "active" : ""} onClick={() => { setMode("correction"); setCat(""); setCorrectionId(""); }}>Correct record</button>\n'
+          if 'mode === "correction" ? "active"' not in text:
+            if photo_tab not in text:
+              raise SystemExit('photo mode tab marker not found')
+            text = text.replace(photo_tab, correction_tab + photo_tab, 1)
+
+          photo_panel = '      {mode === "photo" && (\n'
+          correction_panel = '''      {mode === "correction" && (
+            <section className="panel form-panel">
+              <div className="panel-heading"><div><span className="section-kicker">AUDITED CORRECTION</span><h2>Correct a locked financial record</h2></div><Badge tone="warning">Original preserved</Badge></div>
+              <div className="setup-alert"><strong>Saved financial records are never edited or deleted.</strong><p>A correction creates a replacement amount, while a reversal removes the selected entry from effective totals. The original entry and reason stay in the audit history.</p></div>
+              <form className="stack-form" onSubmit={correctRecord}>
+                <div className="form-grid">
+                  <Select label="Record type" value={correctionKind} onChange={(v) => { setCorrectionKind(v as "internal" | "external" | "expense"); setCorrectionId(""); setCorrectionAmount(""); }}>
+                    <option value="internal">Internal student payment</option>
+                    <option value="external">WAEC / NECO external payment</option>
+                    <option value="expense">School expense</option>
+                  </Select>
+                  <Select label="Category filter" value={cat} onChange={(v) => { setCat(v); setCorrectionId(""); }}>
+                    <option value="">All categories</option>{d.categories.filter((x) => x.active).map((x) => <option key={x.id} value={x.id}>{categoryName(x)}</option>)}
+                  </Select>
+                </div>
+                <Select label="Record to correct" value={correctionId} onChange={(v) => { setCorrectionId(v); setCorrectionAmount(""); }} required>
+                  <option value="">Choose a current effective record</option>{correctionRows.map((x) => <option key={x.id} value={x.id}>{correctionLabel(x)}</option>)}
+                </Select>
+                {!correctionRows.length && <p className="muted">No effective records match this type and category in the current session.</p>}
+                <Select label="What should happen?" value={correctionAction} onChange={(v) => { setCorrectionAction(v as "correct" | "reverse"); setCorrectionAmount(""); }}>
+                  <option value="correct">Correct the amount</option>
+                  <option value="reverse">Reverse this record</option>
+                </Select>
+                {correctionAction === "correct" && <Input label="Correct amount (₦)" type="number" value={correctionAmount} onChange={setCorrectionAmount} required />}
+                <Input label="Reason for correction" value={correctionReason} onChange={setCorrectionReason} required placeholder="e.g. Amount was entered incorrectly" />
+                <button className="button primary full" disabled={busy || !correctionId || correctionReason.trim().length < 5 || (correctionAction === "correct" && numberValue(correctionAmount) <= 0)}>{busy ? "Applying…" : correctionAction === "correct" ? "Apply correction" : "Reverse record"}</button>
+              </form>
+            </section>
+          )}
+
+          '''
+          if 'AUDITED CORRECTION' not in text:
+            if photo_panel not in text:
+              raise SystemExit('photo panel marker not found')
+            text = text.replace(photo_panel, correction_panel + photo_panel, 1)
+
+          text = text.replace('opt(c, "school_expenses")', 'optFallback(c, "effective_school_expense_ledger", "school_expenses")')
+          text = text.replace('opt(c, "external_candidate_payments")', 'optFallback(c, "effective_external_candidate_payment_ledger", "external_candidate_payments")')
+
+          path.write_text(text)
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
+
+      - name: Commit verified correction UI
+        shell: bash
+        run: |
+          rm .github/workflows/correction-ui-repair.yml
+          git config user.name "Ilawo Portal Repair"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "[skip ci] Add audited Principal financial corrections"
+          git push origin HEAD:main
