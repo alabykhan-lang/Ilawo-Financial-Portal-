@@ -1,0 +1,78 @@
+name: Apply Ilawo student register migration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - supabase/migrations/202609120010_remove_student_admission_number.sql
+      - .github/workflows/remove-student-legacy-field.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ilawo-student-register-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PGPASSWORD: ${{ secrets.ILAWO_DB_PASSWORD }}
+      PGDATABASE: postgres
+      PGSSLMODE: require
+
+    steps:
+      - name: Checkout migration
+        uses: actions/checkout@v4
+
+      - name: Connect to the Ilawo database
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${PGPASSWORD:-}" ]; then
+            echo "Missing repository secret ILAWO_DB_PASSWORD."
+            exit 1
+          fi
+
+          try_endpoint() {
+            local host="$1"
+            local port="$2"
+            local user="$3"
+            if PGHOST="$host" PGPORT="$port" PGUSER="$user" psql -v ON_ERROR_STOP=1 -Atqc "select current_database(), current_user;" >/tmp/ilawo-connection.txt 2>/tmp/ilawo-connection.err; then
+              echo "PGHOST=$host" >> "$GITHUB_ENV"
+              echo "PGPORT=$port" >> "$GITHUB_ENV"
+              echo "PGUSER=$user" >> "$GITHUB_ENV"
+              cat /tmp/ilawo-connection.txt
+              return 0
+            fi
+            return 1
+          }
+
+          try_endpoint "aws-0-eu-west-2.pooler.supabase.com" "5432" "postgres.swqvzqncjszzifzrjmcc" \
+            || try_endpoint "aws-0-eu-west-2.pooler.supabase.com" "6543" "postgres.swqvzqncjszzifzrjmcc" \
+            || { echo "No permitted Ilawo PostgreSQL endpoint accepted the database secret."; cat /tmp/ilawo-connection.err || true; exit 1; }
+
+      - name: Verify the Ilawo baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="$(psql -v ON_ERROR_STOP=1 -Atqc "select (to_regclass('public.students') is not null and to_regclass('public.student_payments') is not null);")"
+          if [ "$baseline" != "t" ]; then
+            echo "The connected database is not the Ilawo financial schema; refusing to continue."
+            exit 1
+          fi
+
+      - name: Apply and verify the student register migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/202609120010_remove_student_admission_number.sql
+          remaining="$(psql -v ON_ERROR_STOP=1 -Atqc "select count(*) from information_schema.columns where table_schema='public' and table_name='students' and column_name='admission_no';")"
+          if [ "$remaining" != "0" ]; then
+            echo "The obsolete student column is still present."
+            exit 1
+          fi
+          echo "Ilawo student register migration verified: admission_no is absent."
