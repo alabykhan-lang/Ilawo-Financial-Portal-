@@ -21,10 +21,10 @@ export const EXTENDED_COMMAND_TOOLS = [
           items: {
             type: "object",
             properties: {
-              admission_no: { type: "string" },
+              student_name: { type: "string" },
               amount: { type: "number", exclusiveMinimum: 0 },
             },
-            required: ["admission_no", "amount"],
+            required: ["student_name", "amount"],
           },
         },
       },
@@ -153,19 +153,25 @@ export async function executeExtendedCommandTool(client: AnyClient, name: string
     const c = await category(client, args.category);
     const items = Array.isArray(args.items) ? args.items : [];
     if (!items.length || items.length > 200) throw new CommandCenterError("Batch must contain between 1 and 200 payments.");
-    const admissions = [...new Set(items.map((x: any) => String(x.admission_no || "").trim()).filter(Boolean))];
-    const { data: students, error } = await client.from("students").select("id,admission_no,full_name,class_id,academic_session_id").in("admission_no", admissions);
+    const studentNames = [...new Set(items.map((x: any) => String(x.student_name || "").trim()).filter(Boolean))];
+    const { data: students, error } = await client.from("students").select("id,full_name,class_id,academic_session_id").eq("academic_session_id", p.session.id).eq("status", "active");
     if (error) throw new CommandCenterError(error.message);
-    const byAdmission = new Map((students || []).map((s: R) => [s.admission_no, s]));
-    const missing = admissions.filter((x) => !byAdmission.has(x));
-    if (missing.length) throw new CommandCenterError(`These admission numbers were not found: ${missing.join(", ")}`);
+    const byName = new Map<string, R[]>();
+    (students || []).forEach((s: R) => {
+      const key = String(s.full_name || "").trim().toLowerCase();
+      byName.set(key, [...(byName.get(key) || []), s]);
+    });
+    const missing = studentNames.filter((x) => !byName.has(x.toLowerCase()));
+    if (missing.length) throw new CommandCenterError(`These student names were not found: ${missing.join(", ")}`);
+    const ambiguous = studentNames.filter((x) => (byName.get(x.toLowerCase()) || []).length > 1);
+    if (ambiguous.length) throw new CommandCenterError(`These student names are not unique: ${ambiguous.join(", ")}. Use the portal to choose the correct student.`);
     let registered = new Set<string>();
     if (mixed(c)) {
       const { data } = await client.from("category_candidates").select("student_id").eq("category_id", c.id).eq("session_id", p.session.id);
       registered = new Set((data || []).map((r: R) => r.student_id));
     }
     const rows = items.map((item: any) => {
-      const s = byAdmission.get(String(item.admission_no).trim()) as R;
+      const s = (byName.get(String(item.student_name).trim().toLowerCase()) || [])[0] as R;
       if (s.academic_session_id !== p.session.id) throw new CommandCenterError(`${s.full_name} is not in the current session.`);
       if (mixed(c) && !registered.has(s.id)) throw new CommandCenterError(`${s.full_name} is not registered as an internal ${c.name} candidate.`);
       const amount = Number(item.amount);
@@ -269,7 +275,7 @@ export async function executeExtendedCommandTool(client: AnyClient, name: string
     const { data: targetSession } = await client.from("academic_sessions").select("id,name").ilike("name", String(args.target_session || "").trim()).eq("is_test", false).maybeSingle();
     if (!from || !to || !targetSession) throw new CommandCenterError("From class, to class or target session could not be resolved.");
     const current = await period(client);
-    const { data: students, error } = await client.from("students").select("id,full_name,admission_no").eq("class_id", from.id).eq("academic_session_id", current.session.id).eq("status", "active");
+    const { data: students, error } = await client.from("students").select("id,full_name").eq("class_id", from.id).eq("academic_session_id", current.session.id).eq("status", "active");
     if (error) throw new CommandCenterError(error.message);
     if (!students?.length) return { ok: true, message: "No active students needed promotion.", count: 0 };
     const ids = students.map((s: R) => s.id);

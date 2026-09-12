@@ -62,7 +62,6 @@ export interface FinancialCategory {
 
 export interface Student {
   id: string;
-  admission_no: string;
   full_name: string;
   class_id: string;
   arm: string | null;
@@ -99,7 +98,7 @@ export interface Payment {
   is_correction: boolean;
   correction_request_id: string | null;
   origin_payment_id: string | null;
-  student?: Pick<Student, "full_name" | "admission_no">;
+  student?: Pick<Student, "full_name">;
   class?: Pick<SchoolClass, "name">;
   category?: Pick<FinancialCategory, "name">;
   collector?: Pick<Profile, "full_name">;

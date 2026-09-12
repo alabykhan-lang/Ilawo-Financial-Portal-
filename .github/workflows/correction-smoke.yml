@@ -102,8 +102,8 @@ jobs:
             select id into v_ss2 from public.classes where name='SS2' limit 1;
             select id into v_waec from public.financial_categories where upper(name)='WAEC' and active limit 1;
 
-            insert into public.students(admission_no, full_name, class_id, academic_session_id, status)
-            values ('CORR-SS2-001','Correction Internal Student',v_ss2,v_session,'active')
+            insert into public.students(full_name, class_id, academic_session_id, status)
+            values ('Correction Internal Student',v_ss2,v_session,'active')
             returning id into v_student;
             insert into public.category_candidates(category_id,student_id,session_id)
             values (v_waec,v_student,v_session);

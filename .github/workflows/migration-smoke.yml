@@ -182,8 +182,8 @@ jobs:
             select id into v_waec from public.financial_categories where upper(name) = 'WAEC' and active limit 1;
             select id into v_bece from public.financial_categories where upper(name) = 'BECE' and active limit 1;
 
-            insert into public.students(admission_no, full_name, class_id, academic_session_id, status)
-            values ('SMOKE-SS2-001', 'Smoke WAEC Student', v_ss2, v_session, 'active')
+            insert into public.students(full_name, class_id, academic_session_id, status)
+            values ('Smoke WAEC Student', v_ss2, v_session, 'active')
             returning id into v_student;
 
             begin
@@ -230,8 +230,8 @@ jobs:
               raise exception 'Category scope guard did not force a custom category to internal_only';
             end if;
 
-            insert into public.students(admission_no, full_name, class_id, academic_session_id, status)
-            values ('SMOKE-HISTORY-001', 'Smoke History Student', v_jss1, v_session, 'active')
+            insert into public.students(full_name, class_id, academic_session_id, status)
+            values ('Smoke History Student', v_jss1, v_session, 'active')
             returning id into v_history_student;
 
             update public.students set class_id = v_jss2 where id = v_history_student;

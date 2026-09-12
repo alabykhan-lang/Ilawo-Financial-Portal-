@@ -29,7 +29,6 @@ type Data = {
 };
 
 type ImportRow = {
-  admission_no: string;
   full_name: string;
   class_name: string;
   arm?: string;
@@ -223,7 +222,7 @@ function catSummary(d: Data, c: R, sessionId: string, termId: string, from?: str
     expected += due;
     const got = paid.get(s.id) || 0;
     const status = got >= due ? "full" : got > 0 ? "part" : "unpaid";
-    statusRows.push({ id: `internal-${s.id}`, name: s.full_name, admission_no: s.admission_no, type: "Internal", paid: got, due, status });
+    statusRows.push({ id: `internal-${s.id}`, name: s.full_name, type: "Internal", paid: got, due, status });
     if (status === "full") fully++;
     else if (status === "part") part++;
     else unpaid++;
@@ -241,7 +240,7 @@ function catSummary(d: Data, c: R, sessionId: string, termId: string, from?: str
     extExpected += due;
     const got = extPaid.get(s.id) || 0;
     const status = got >= due ? "full" : got > 0 ? "part" : "unpaid";
-    statusRows.push({ id: `external-${s.id}`, name: s.full_name, admission_no: s.class_level || "External", type: "External", paid: got, due, status });
+    statusRows.push({ id: `external-${s.id}`, name: s.full_name, type: "External", paid: got, due, status });
     if (status === "full") extFully++;
     else if (status === "part") extPart++;
     else extUnpaid++;
@@ -366,7 +365,7 @@ function Home({ d, go }: { d: Data; go: (t: Tab) => void }) {
               <div className="simple-list" style={{ marginTop: 12 }}>
                 {s.statusRows.map((row: R) => (
                   <div className="simple-list-row" key={row.id}>
-                    <div><strong>{row.name}</strong><span>{row.type}{row.admission_no ? ` · ${row.admission_no}` : ""} · Paid {naira(row.paid)} of {naira(row.due)}</span></div>
+                    <div><strong>{row.name}</strong><span>{row.type} · Paid {naira(row.paid)} of {naira(row.due)}</span></div>
                     <Badge tone={row.status === "full" ? "success" : row.status === "part" ? "warning" : "danger"}>{row.status === "full" ? "Fully paid" : row.status === "part" ? "Partly paid" : "Not paid"}</Badge>
                   </div>
                 ))}
@@ -618,7 +617,7 @@ function Record({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =>
               </Select>
             </div>
             <Select label="Student" value={student} onChange={setStudent} required>
-              <option value="">Choose student</option>{students.map((x) => <option key={x.id} value={x.id}>{x.full_name} · {x.admission_no}</option>)}
+              <option value="">Choose student</option>{students.map((x) => <option key={x.id} value={x.id}>{x.full_name}</option>)}
             </Select>
             {mixed && cls && !students.length && <div className="setup-alert"><strong>No registered internal candidates found.</strong><p>Register WAEC/NECO internal candidates in Settings first.</p></div>}
             <div className="form-grid"><Input label="Amount paid (₦)" type="number" value={amount} onChange={setAmount} required /><Input label="Date" type="date" value={date} onChange={setDate} required /></div>
@@ -641,7 +640,7 @@ function Record({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =>
               </Select>
             </div>
             {cls && students.length > 0 ? (
-              <div className="batch-list">{students.map((s) => <div className="batch-row" key={s.id}><div><strong>{s.full_name}</strong><span>{s.admission_no}</span></div><input type="number" min="0" step="0.01" placeholder="₦ 0" value={batch[s.id] || ""} onChange={(e) => { setBatch({ ...batch, [s.id]: e.target.value }); setReview(false); }} /></div>)}</div>
+              <div className="batch-list">{students.map((s) => <div className="batch-row" key={s.id}><div><strong>{s.full_name}</strong></div><input type="number" min="0" step="0.01" placeholder="₦ 0" value={batch[s.id] || ""} onChange={(e) => { setBatch({ ...batch, [s.id]: e.target.value }); setReview(false); }} /></div>)}</div>
             ) : cls ? (
               <div className="setup-alert"><strong>{mixed ? "No registered internal candidates found." : `No internal students found in ${d.classes.find((x) => x.id === cls)?.name}.`}</strong><p>{mixed ? "Select WAEC/NECO internal candidates in Settings first." : "Add or import the class students in Classes."}</p></div>
             ) : <p className="muted">Choose a category and class. The complete student list will appear here.</p>}
@@ -746,7 +745,6 @@ function Classes({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<R | null>(null);
   const [name, setName] = useState("");
-  const [admission, setAdmission] = useState("");
   const [studentClass, setStudentClass] = useState(d.classes[0]?.id || "");
   const [arm, setArm] = useState("");
   const [guardianName, setGuardianName] = useState("");
@@ -757,15 +755,15 @@ function Classes({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =
 
   const rows = d.students
     .filter((s) => s.academic_session_id === session?.id && (cls === "all" || s.class_id === cls))
-    .filter((s) => !search.trim() || `${s.full_name} ${s.admission_no} ${s.guardian_name || ""} ${s.guardian_phone || ""}`.toLowerCase().includes(search.trim().toLowerCase()))
+    .filter((s) => !search.trim() || `${s.full_name} ${s.guardian_name || ""} ${s.guardian_phone || ""}`.toLowerCase().includes(search.trim().toLowerCase()))
     .sort((a, b) => String(a.full_name).localeCompare(String(b.full_name)));
 
   function resetForm() {
-    setEditing(null); setName(""); setAdmission(""); setStudentClass(d.classes[0]?.id || ""); setArm(""); setGuardianName(""); setGuardianPhone(""); setGuardianEmail("");
+    setEditing(null); setName(""); setStudentClass(d.classes[0]?.id || ""); setArm(""); setGuardianName(""); setGuardianPhone(""); setGuardianEmail("");
   }
 
   function edit(s: R) {
-    setEditing(s); setName(s.full_name || ""); setAdmission(s.admission_no || ""); setStudentClass(s.class_id || d.classes[0]?.id || ""); setArm(s.arm || ""); setGuardianName(s.guardian_name || ""); setGuardianPhone(s.guardian_phone || ""); setGuardianEmail(s.guardian_email || "");
+    setEditing(s); setName(s.full_name || ""); setStudentClass(s.class_id || d.classes[0]?.id || ""); setArm(s.arm || ""); setGuardianName(s.guardian_name || ""); setGuardianPhone(s.guardian_phone || ""); setGuardianEmail(s.guardian_email || "");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -773,7 +771,7 @@ function Classes({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =
     e.preventDefault();
     if (!session?.id) return;
     setBusy(true);
-    const payload = { full_name: name.trim(), admission_no: admission.trim(), class_id: studentClass, academic_session_id: session.id, arm: arm || null, guardian_name: guardianName || null, guardian_phone: guardianPhone || null, guardian_email: guardianEmail || null, status: "active" };
+    const payload = { full_name: name.trim(), class_id: studentClass, academic_session_id: session.id, arm: arm || null, guardian_name: guardianName || null, guardian_phone: guardianPhone || null, guardian_email: guardianEmail || null, status: "active" };
     const q = editing ? c.from("students").update(payload).eq("id", editing.id) : c.from("students").insert(payload);
     const { error } = await q;
     setBusy(false);
@@ -793,7 +791,6 @@ function Classes({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =
         const lower: Record<string, any> = {};
         Object.entries(r).forEach(([k, v]) => { lower[k.trim().toLowerCase().replace(/\s+/g, "_")] = v; });
         const row: ImportRow = {
-          admission_no: String(lower.admission_no || lower.admission_number || "").trim(),
           full_name: String(lower.full_name || lower.student_name || lower.name || "").trim(),
           class_name: String(lower.class || lower.class_name || "").trim().toUpperCase(),
           arm: String(lower.arm || "").trim(),
@@ -801,7 +798,7 @@ function Classes({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =
           guardian_phone: String(lower.guardian_phone || lower.parent_phone || lower.phone || "").trim(),
           guardian_email: String(lower.guardian_email || lower.parent_email || "").trim(),
         };
-        if (!row.admission_no || !row.full_name || !d.classes.some((x) => x.name.toUpperCase() === row.class_name)) row.error = "Admission number, student name and a valid class are required.";
+        if (!row.full_name || !d.classes.some((x) => x.name.toUpperCase() === row.class_name)) row.error = "Student name and a valid class are required.";
         return row;
       });
       setImportRows(normalized);
@@ -816,7 +813,6 @@ function Classes({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =
     if (!valid.length) return;
     setBusy(true);
     const payload = valid.map((r) => ({
-      admission_no: r.admission_no,
       full_name: r.full_name,
       class_id: d.classes.find((x) => x.name.toUpperCase() === r.class_name)?.id,
       academic_session_id: session.id,
@@ -826,10 +822,26 @@ function Classes({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =
       guardian_email: r.guardian_email || null,
       status: "active",
     }));
-    const { error } = await c.from("students").upsert(payload, { onConflict: "admission_no" });
+    const { data: existing, error: existingError } = await c.from("students").select("id,full_name,class_id,arm").eq("academic_session_id", session.id);
+    if (existingError) {
+      setBusy(false);
+      return notify({ type: "error", message: existingError.message });
+    }
+    const seen = new Set((existing || []).map((s) => `${String(s.full_name).trim().toLowerCase()}|${s.class_id}|${String(s.arm || "").trim().toLowerCase()}`));
+    const freshPayload = payload.filter((row) => {
+      const key = `${String(row.full_name).trim().toLowerCase()}|${row.class_id}|${String(row.arm || "").trim().toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (!freshPayload.length) {
+      setBusy(false);
+      return notify({ type: "info", message: "All valid rows are already in the register." });
+    }
+    const { error } = await c.from("students").insert(freshPayload);
     setBusy(false);
     if (error) return notify({ type: "error", message: error.message });
-    notify({ type: "success", message: `${valid.length} students imported into the master register.` });
+    notify({ type: "success", message: `${freshPayload.length} students imported into the master register.` });
     setImportRows([]);
     await reload();
   }
@@ -840,7 +852,7 @@ function Classes({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =
       <section className="panel form-panel">
         <div className="panel-heading"><div><span className="section-kicker">MASTER REGISTER</span><h2>{editing ? "Edit student" : "Add student"}</h2></div>{editing && <button className="button ghost" onClick={resetForm}>Cancel edit</button>}</div>
         <form className="stack-form" onSubmit={saveStudent}>
-          <div className="form-grid"><Input label="Student name" value={name} onChange={setName} required /><Input label="Admission number" value={admission} onChange={setAdmission} required /></div>
+          <Input label="Student name" value={name} onChange={setName} required />
           <div className="form-grid"><Select label="Class" value={studentClass} onChange={setStudentClass} required>{d.classes.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select><Input label="Arm (optional)" value={arm} onChange={setArm} /></div>
           <div className="form-grid"><Input label="Parent / guardian name" value={guardianName} onChange={setGuardianName} /><Input label="Parent / guardian phone" value={guardianPhone} onChange={setGuardianPhone} /></div>
           <Input label="Parent / guardian email (optional)" type="email" value={guardianEmail} onChange={setGuardianEmail} />
@@ -851,16 +863,16 @@ function Classes({ d, c, reload, notify }: { d: Data; c: AnyClient; reload: () =
       <section className="panel">
         <div className="panel-heading"><div><span className="section-kicker">BULK IMPORT</span><h2>Import Excel or CSV</h2></div><a className="button ghost" href="/student-import-template.csv" download>Download template</a></div>
         <label className="file-button">Choose Excel / CSV<input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => { const f = e.target.files?.[0]; if (f) void parseFile(f); }} /></label>
-        {importRows.length > 0 && <div style={{ marginTop: 18 }}><p className="helper-line">Preview: {importRows.length} rows · {importRows.filter((r) => !r.error).length} ready · {importRows.filter((r) => r.error).length} need attention</p><div className="table-scroll"><table><thead><tr><th>Admission</th><th>Name</th><th>Class</th><th>Guardian</th><th>Status</th></tr></thead><tbody>{importRows.slice(0, 20).map((r, i) => <tr key={`${r.admission_no}-${i}`}><td>{r.admission_no || "—"}</td><td>{r.full_name || "—"}</td><td>{r.class_name || "—"}</td><td>{r.guardian_name || "—"}</td><td>{r.error ? <Badge tone="danger">Fix row</Badge> : <Badge tone="success">Ready</Badge>}</td></tr>)}</tbody></table></div>{importRows.length > 20 && <p className="muted">Showing the first 20 rows. All valid rows will be imported.</p>}<button className="button primary" disabled={busy || !importRows.some((r) => !r.error)} onClick={() => void importStudents()}>Import valid students</button></div>}
+        {importRows.length > 0 && <div style={{ marginTop: 18 }}><p className="helper-line">Preview: {importRows.length} rows · {importRows.filter((r) => !r.error).length} ready · {importRows.filter((r) => r.error).length} need attention</p><div className="table-scroll"><table><thead><tr><th>Name</th><th>Class</th><th>Guardian</th><th>Status</th></tr></thead><tbody>{importRows.slice(0, 20).map((r, i) => <tr key={`${r.full_name}-${r.class_name}-${i}`}><td>{r.full_name || "—"}</td><td>{r.class_name || "—"}</td><td>{r.guardian_name || "—"}</td><td>{r.error ? <Badge tone="danger">Fix row</Badge> : <Badge tone="success">Ready</Badge>}</td></tr>)}</tbody></table></div>{importRows.length > 20 && <p className="muted">Showing the first 20 rows. All valid rows will be imported.</p>}<button className="button primary" disabled={busy || !importRows.some((r) => !r.error)} onClick={() => void importStudents()}>Import valid students</button></div>}
       </section>
 
       <section className="panel">
         <div className="panel-heading"><div><span className="section-kicker">STUDENT LIST</span><h2>{rows.length} students shown</h2></div></div>
         <div className="form-grid" style={{ marginBottom: 18 }}>
           <Select label="Class" value={cls} onChange={setCls}><option value="all">All classes</option>{d.classes.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select>
-          <Input label="Search" value={search} onChange={setSearch} placeholder="Name, admission number or parent phone" />
+          <Input label="Search" value={search} onChange={setSearch} placeholder="Name or parent phone" />
         </div>
-        {rows.length ? <div className="simple-list">{rows.map((s) => <div className="simple-list-row" key={s.id}><div><strong>{s.full_name}</strong><span>{d.classes.find((x) => x.id === s.class_id)?.name} · {s.admission_no}{s.guardian_phone ? ` · ${s.guardian_phone}` : ""}</span></div><button className="button ghost" onClick={() => edit(s)}>Edit</button></div>)}</div> : <p className="muted">No matching students.</p>}
+        {rows.length ? <div className="simple-list">{rows.map((s) => <div className="simple-list-row" key={s.id}><div><strong>{s.full_name}</strong><span>{d.classes.find((x) => x.id === s.class_id)?.name}{s.guardian_phone ? ` · ${s.guardian_phone}` : ""}</span></div><button className="button ghost" onClick={() => edit(s)}>Edit</button></div>)}</div> : <p className="muted">No matching students.</p>}
       </section>
     </div>
   );
@@ -909,7 +921,7 @@ function Reports({ d }: { d: Data }) {
       {cat && rows[0]?.s.statusRows.length > 0 && (
         <section className="panel">
           <div className="panel-heading"><div><span className="section-kicker">PAYMENT STATUS NAMES</span><h2>{categoryName(rows[0].c)}</h2></div></div>
-          <div className="simple-list">{rows[0].s.statusRows.map((row: R) => <div className="simple-list-row" key={row.id}><div><strong>{row.name}</strong><span>{row.type}{row.admission_no ? ` · ${row.admission_no}` : ""} · {naira(row.paid)} / {naira(row.due)}</span></div><Badge tone={row.status === "full" ? "success" : row.status === "part" ? "warning" : "danger"}>{row.status === "full" ? "Fully paid" : row.status === "part" ? "Partly paid" : "Not paid"}</Badge></div>)}</div>
+          <div className="simple-list">{rows[0].s.statusRows.map((row: R) => <div className="simple-list-row" key={row.id}><div><strong>{row.name}</strong><span>{row.type} · {naira(row.paid)} / {naira(row.due)}</span></div><Badge tone={row.status === "full" ? "success" : row.status === "part" ? "warning" : "danger"}>{row.status === "full" ? "Fully paid" : row.status === "part" ? "Partly paid" : "Not paid"}</Badge></div>)}</div>
         </section>
       )}
     </div>

@@ -34,7 +34,7 @@ export const COMMAND_TOOLS = [
       type: "object",
       properties: {
         class_name: { type: "string", description: "Optional class, e.g. SS3" },
-        search: { type: "string", description: "Optional name, admission number or guardian phone search" },
+        search: { type: "string", description: "Optional student name or guardian phone search" },
       },
     },
   },
@@ -44,13 +44,13 @@ export const COMMAND_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        admission_no: { type: "string" },
+        student_name: { type: "string" },
         category: { type: "string" },
         amount: { type: "number", exclusiveMinimum: 0 },
         payment_date: { type: "string", description: "YYYY-MM-DD; defaults to today" },
         note: { type: "string" },
       },
-      required: ["admission_no", "category", "amount"],
+      required: ["student_name", "category", "amount"],
     },
   },
   {
@@ -106,7 +106,6 @@ export const COMMAND_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        admission_no: { type: "string" },
         full_name: { type: "string" },
         class_name: { type: "string" },
         arm: { type: "string" },
@@ -114,7 +113,7 @@ export const COMMAND_TOOLS = [
         guardian_phone: { type: "string" },
         guardian_email: { type: "string" },
       },
-      required: ["admission_no", "full_name", "class_name"],
+      required: ["full_name", "class_name"],
     },
   },
   {
@@ -149,11 +148,11 @@ export const COMMAND_TOOLS = [
       type: "object",
       properties: {
         category: { type: "string", enum: ["WAEC", "NECO"] },
-        admission_no: { type: "string" },
+        student_name: { type: "string" },
         registered: { type: "boolean" },
         expected_amount_override: { type: "number", minimum: 0 },
       },
-      required: ["category", "admission_no", "registered"],
+      required: ["category", "student_name", "registered"],
     },
   },
 ] as const;
@@ -240,10 +239,14 @@ async function resolveClass(client: AnyClient, name: string) {
   return data;
 }
 
-async function resolveStudent(client: AnyClient, admissionNo: string) {
-  const { data } = await client.from("students").select("*").eq("admission_no", String(admissionNo || "").trim()).limit(1).maybeSingle();
-  if (!data) throw new CommandCenterError(`Student with admission number '${admissionNo}' was not found.`);
-  return data;
+async function resolveStudent(client: AnyClient, studentName: string) {
+  const value = String(studentName || "").trim();
+  if (!value) throw new CommandCenterError("A student name is required.");
+  const { data, error } = await client.from("students").select("*").ilike("full_name", value).eq("status", "active").limit(5);
+  if (error) throw new CommandCenterError(error.message);
+  if (!data?.length) throw new CommandCenterError(`Student named '${value}' was not found.`);
+  if (data.length > 1) throw new CommandCenterError(`More than one student is named '${value}'. Use the portal to choose the correct student.`);
+  return data[0];
 }
 
 async function categorySummary(client: AnyClient, category: Row, session: Row, term: Row | null) {
@@ -305,14 +308,14 @@ export async function executeCommandTool(client: AnyClient, profile: Row, name: 
       const { data: registrations } = await client.from("category_candidates").select("student_id,expected_amount_override").eq("category_id", category.id).eq("session_id", period.session.id);
       const ids = (registrations || []).map((r: Row) => r.student_id);
       if (ids.length) {
-        const { data } = await client.from("students").select("id,admission_no,full_name,class_id").in("id", ids);
+        const { data } = await client.from("students").select("id,full_name,class_id").in("id", ids);
         internal = data || [];
       }
     } else {
       const { data: mappings } = await client.from("financial_category_classes").select("class_id").eq("category_id", category.id);
       const classIds = (mappings || []).map((r: Row) => r.class_id);
       if (classIds.length) {
-        const { data } = await client.from("students").select("id,admission_no,full_name,class_id").eq("academic_session_id", period.session.id).eq("status", "active").in("class_id", classIds);
+        const { data } = await client.from("students").select("id,full_name,class_id").eq("academic_session_id", period.session.id).eq("status", "active").in("class_id", classIds);
         internal = data || [];
       }
     }
@@ -321,12 +324,12 @@ export async function executeCommandTool(client: AnyClient, profile: Row, name: 
   }
 
   if (name === "list_students") {
-    let q = client.from("students").select("id,admission_no,full_name,class_id,arm,status,guardian_name,guardian_phone,guardian_email").eq("academic_session_id", period.session.id).eq("status", "active").order("full_name");
+    let q = client.from("students").select("id,full_name,class_id,arm,status,guardian_name,guardian_phone,guardian_email").eq("academic_session_id", period.session.id).eq("status", "active").order("full_name");
     if (args.class_name) {
       const classRow = await resolveClass(client, args.class_name);
       q = q.eq("class_id", classRow.id);
     }
-    if (args.search) q = q.or(`full_name.ilike.%${String(args.search).replaceAll(",", " ")}%,admission_no.ilike.%${String(args.search).replaceAll(",", " ")}%,guardian_phone.ilike.%${String(args.search).replaceAll(",", " ")}%`);
+    if (args.search) q = q.or(`full_name.ilike.%${String(args.search).replaceAll(",", " ")}%,guardian_phone.ilike.%${String(args.search).replaceAll(",", " ")}%`);
     const { data, error } = await q.limit(500);
     if (error) throw new CommandCenterError(error.message);
     return { session: period.session.name, count: data?.length || 0, students: data || [] };
@@ -334,7 +337,7 @@ export async function executeCommandTool(client: AnyClient, profile: Row, name: 
 
   if (name === "record_internal_payment") {
     const category = await resolveCategory(client, args.category);
-    const student = await resolveStudent(client, args.admission_no);
+    const student = await resolveStudent(client, args.student_name);
     if (student.academic_session_id !== period.session.id) throw new CommandCenterError("That student is not in the current academic session.");
     if (scope(category) === "mixed") {
       const { data: registration } = await client.from("category_candidates").select("id").eq("category_id", category.id).eq("student_id", student.id).eq("session_id", period.session.id).maybeSingle();
@@ -396,7 +399,6 @@ export async function executeCommandTool(client: AnyClient, profile: Row, name: 
   if (name === "add_student") {
     const classRow = await resolveClass(client, args.class_name);
     const payload = {
-      admission_no: String(args.admission_no).trim(),
       full_name: String(args.full_name).trim(),
       class_id: classRow.id,
       arm: args.arm || null,
@@ -406,7 +408,7 @@ export async function executeCommandTool(client: AnyClient, profile: Row, name: 
       guardian_phone: args.guardian_phone || null,
       guardian_email: args.guardian_email || null,
     };
-    const { data, error } = await client.from("students").insert(payload).select("id,admission_no,full_name,class_id").single();
+    const { data, error } = await client.from("students").insert(payload).select("id,full_name,class_id").single();
     if (error) throw new CommandCenterError(error.message);
     return { ok: true, message: "Student added to the internal master register.", student: data, class: classRow.name };
   }
@@ -443,7 +445,7 @@ export async function executeCommandTool(client: AnyClient, profile: Row, name: 
   if (name === "set_internal_exam_registration") {
     const category = await resolveCategory(client, args.category);
     if (scope(category) !== "mixed") throw new CommandCenterError("Internal exam registration management is only for WAEC and NECO.");
-    const student = await resolveStudent(client, args.admission_no);
+    const student = await resolveStudent(client, args.student_name);
     const { data: existing } = await client.from("category_candidates").select("id").eq("category_id", category.id).eq("student_id", student.id).eq("session_id", period.session.id).maybeSingle();
     if (args.registered) {
       if (existing) {
